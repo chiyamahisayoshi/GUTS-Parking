@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+APP_DIR="${RENTAL_APP_DIR:-/www/wwwroot/rentalcar-app}"
+DATA_DIR="${RENTAL_DATA_DIR:-/www/wwwroot/rentalcar-data}"
+NODE_BIN="${RENTAL_NODE_BIN:-/www/server/nodejs/v24.21.0/bin/node}"
+NODE_DIR="$(dirname "$NODE_BIN")"
+RUN_USER="${RENTAL_USER:-www}"
+PM2_HOME="${RENTAL_PM2_HOME:-$DATA_DIR/.pm2}"
+BRANCH="${RENTAL_BRANCH:-main}"
+PORT="${RENTAL_PORT:-8000}"
+SERVICE_NAME="${RENTAL_SERVICE_NAME:-rentalcar}"
+RESTART_NEEDED=0
+
+usage() {
+  cat <<'EOF'
+Usage:
+  rental update   Back up the database, update from origin/main, install dependencies, and restart.
+  rental status   Show PM2 and local HTTP health status.
+  rental help     Show this help.
+
+Run through the installed `rental` command from the VPS root shell. Paths and
+service settings can be overridden with RENTAL_APP_DIR, RENTAL_DATA_DIR,
+RENTAL_NODE_BIN, RENTAL_USER, RENTAL_PM2_HOME, RENTAL_BRANCH, RENTAL_PORT,
+and RENTAL_SERVICE_NAME.
+EOF
+}
+
+require_app_user() {
+  if [[ "$(id -un)" != "$RUN_USER" ]]; then
+    echo "Run this script through the installed rental command or as '$RUN_USER'." >&2
+    exit 1
+  fi
+}
+
+restart_app() {
+  pm2 restart "$SERVICE_NAME" --update-env
+}
+
+restore_service_on_error() {
+  local exit_code=$?
+  if (( RESTART_NEEDED )); then
+    echo "Update did not finish. Attempting to restart the existing PM2 service..." >&2
+    restart_app || echo "Automatic restart failed. Inspect PM2 logs for $SERVICE_NAME." >&2
+  fi
+  exit "$exit_code"
+}
+
+status() {
+  require_app_user
+  pm2 status
+  local code
+  code="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$PORT/" || true)"
+  if [[ "$code" != 200 ]]; then
+    echo "Local HTTP health check failed: http://127.0.0.1:$PORT/" >&2
+    return 1
+  fi
+  echo "HTTP health check passed."
+}
+
+update() {
+  require_app_user
+  for command in git flock curl cp npm pm2 date sleep; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+      echo "Required command not found: $command" >&2
+      exit 1
+    fi
+  done
+  if [[ ! -d "$APP_DIR/.git" || ! -x "$NODE_BIN" || ! -f "$APP_DIR/package-lock.json" ]]; then
+    echo "Rental app, Node.js, or package-lock.json was not found. Check the VPS paths." >&2
+    exit 1
+  fi
+  if [[ ! -f "$DATA_DIR/rentalcar.db" ]]; then
+    echo "Database not found: $DATA_DIR/rentalcar.db" >&2
+    exit 1
+  fi
+
+  exec 9>"$DATA_DIR/.rental-update.lock"
+  if ! flock -n 9; then
+    echo "Another rental update is already running." >&2
+    exit 1
+  fi
+
+  local changes
+  changes="$(git -C "$APP_DIR" status --porcelain)"
+  if [[ -n "$changes" ]]; then
+    echo "The app repository has local changes; refusing to overwrite them:" >&2
+    printf '%s\n' "$changes" >&2
+    echo "Review or commit those changes, then run rental update again." >&2
+    exit 1
+  fi
+
+  echo "Checking origin/$BRANCH..."
+  git -C "$APP_DIR" fetch origin "refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+  if ! git -C "$APP_DIR" merge-base --is-ancestor HEAD "origin/$BRANCH"; then
+    echo "The current checkout cannot be fast-forwarded to origin/$BRANCH; no files were changed." >&2
+    exit 1
+  fi
+  if git -C "$APP_DIR" diff --quiet HEAD "origin/$BRANCH"; then
+    echo "Already up to date with origin/$BRANCH."
+    status
+    return
+  fi
+
+  trap restore_service_on_error EXIT
+  echo "Stopping $SERVICE_NAME..."
+  pm2 stop "$SERVICE_NAME"
+  RESTART_NEEDED=1
+
+  echo "Checkpointing SQLite and creating a backup..."
+  "$NODE_BIN" -e '
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(process.argv[1]);
+    try {
+      const result = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
+      if (result.busy !== 0) throw new Error("SQLite WAL checkpoint is busy.");
+    } finally {
+      db.close();
+    }
+  ' "$DATA_DIR/rentalcar.db"
+  local backup="$DATA_DIR/rentalcar.db.backup-$(date +%Y%m%d-%H%M%S)-$$"
+  cp -p "$DATA_DIR/rentalcar.db" "$backup"
+  echo "Database backup: $backup"
+
+  echo "Fast-forwarding to origin/$BRANCH..."
+  git -C "$APP_DIR" merge --ff-only "origin/$BRANCH"
+  echo "Installing production dependencies..."
+  (cd "$APP_DIR" && npm ci --omit=dev --cache "$DATA_DIR/npm-cache")
+
+  echo "Starting $SERVICE_NAME..."
+  restart_app
+  RESTART_NEEDED=0
+  trap - EXIT
+
+  echo "Checking local HTTP health..."
+  local attempt
+  for attempt in {1..20}; do
+    if [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$PORT/" || true)" == 200 ]]; then
+      echo "Update complete. The app is responding at http://127.0.0.1:$PORT/."
+      return
+    fi
+    sleep 1
+  done
+  echo "The app did not pass its HTTP health check. Review PM2 logs:" >&2
+  pm2 logs "$SERVICE_NAME" --lines 50 --nostream >&2 || true
+  return 1
+}
+
+case "${1:-help}" in
+  update) update ;;
+  status) status ;;
+  help|-h|--help) usage ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
