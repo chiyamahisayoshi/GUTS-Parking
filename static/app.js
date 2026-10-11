@@ -545,7 +545,7 @@
     vehicleForm.reset();
     formError.textContent = "";
     document.querySelector("#dialog-title").textContent = vehicle ? "車両情報を編集" : "車両を追加";
-    document.querySelector("#delete-vehicle").hidden = !vehicle;
+    document.querySelector("#delete-vehicle").hidden = !vehicle || !canManage;
     vehicleForm.elements.id.value = vehicle?.id || "";
     vehicleForm.elements.plate.value = vehicle?.plate || "";
     vehicleForm.elements.vehicle_type.value = vehicle?.vehicle_type || vehicleTypes[0] || "";
@@ -624,6 +624,7 @@
   document.querySelector("#close-dialog").addEventListener("click", () => dialog.close());
   document.querySelector("#cancel-dialog").addEventListener("click", () => dialog.close());
   document.querySelector("#delete-vehicle").addEventListener("click", async () => {
+    if (!canManage) return;
     const id = vehicleForm.elements.id.value;
     if (!id || !window.confirm("この車両を削除しますか？")) return;
     try {
