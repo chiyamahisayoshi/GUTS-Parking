@@ -1,0 +1,29 @@
+{
+  "name": "rentalcar-live-board",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A realtime rental vehicle parking board",
+  "main": "app/server.js",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "packageManager": "npm@11.19.0",
+  "scripts": {
+    "start": "node app/server.js",
+    "test": "node --test tests/test_app.js",
+    "create-admin": "node app/create-admin.js"
+  },
+  "dependencies": {
+    "cookie": "^1.0.2",
+    "cookie-signature": "^1.2.2",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.0.1",
+    "express-session": "^1.18.2",
+    "helmet": "^8.1.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "supertest": "^7.1.4"
+  }
+}

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f2f5f8">
+  <title>Rental Car Board</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main id="login-screen" class="login-screen" hidden>
+    <form id="login-form" class="login-card">
+      <div class="brand-mark">R</div>
+      <p class="eyebrow">RENTAL CAR OPERATIONS</p>
+      <h1>車両配置ボード</h1>
+      <p class="muted">ログインして共有ボードを開きます。</p>
+      <label>ユーザー名<input name="username" autocomplete="username" required maxlength="80"></label>
+      <label>パスワード<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="primary-button" type="submit">ログイン</button>
+      <p id="login-error" class="error-message" role="alert"></p>
+    </form>
+  </main>
+  <div id="app-screen" hidden>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Rental Car Board">
+        <span class="brand-mark small">R</span>
+        <span><b>車両配置ボード</b><small>RENTAL CAR OPERATIONS</small></span>
+      </a>
+      <div class="topbar-actions">
+        <span id="connection-state" class="connection"><i></i>接続中</span>
+        <span id="current-user" class="current-user"></span>
+        <button id="logout-button" class="quiet-button">ログアウト</button>
+      </div>
+    </header>
+    <main class="page-content">
+      <section class="page-heading">
+        <div><p class="eyebrow">LIVE FLEET OVERVIEW</p><h1>車両配置</h1><p class="muted">駐車場、貸出中エリア、予備、立駐はすべて同じ階層です。車両はどのエリアにも自由に移動できます。</p></div>
+        <button id="add-vehicle-button" class="primary-button">＋ 車両を追加</button>
+      </section>
+      <section class="summary-row" aria-label="車両の概要">
+        <div class="summary-card"><span>登録車両</span><b id="vehicle-count">0</b></div>
+        <div class="summary-card"><span>配置エリア</span><b id="lot-count">13</b></div>
+        <div class="summary-card"><span>要対応</span><b id="attention-count">0</b></div>
+      </section>
+      <div class="board-workspace">
+        <section id="parking-grid" class="parking-grid" aria-label="駐車場・貸出場所"></section>
+        <aside class="vehicle-catalog" aria-labelledby="catalog-title">
+          <div class="catalog-heading"><h2 id="catalog-title">車両一覧</h2><span id="catalog-total" class="muted"></span></div>
+          <div id="vehicle-type-filters" class="catalog-filters" role="group" aria-label="車種で絞り込み">
+            <button class="type-filter active" data-vehicle-type="all">All</button>
+          </div>
+          <div id="vehicle-catalog-list" class="vehicle-catalog-list"></div>
+        </aside>
+      </div>
+      <section class="status-section">
+        <div class="section-heading"><div><p class="eyebrow">FOLLOW-UP</p><h2>ステータス別の車両</h2></div><span id="status-total" class="muted"></span></div>
+        <div class="filter-row" role="group" aria-label="車両ステータスで絞り込み">
+          <button class="filter-button active" data-filter="all">すべて</button>
+          <button class="filter-button" data-filter="unwashed">🫧 洗車待ち</button>
+          <button class="filter-button" data-filter="no_fuel">⛽ 給油待ち</button>
+          <button class="filter-button" data-filter="needs_repair">🔧 要修理</button>
+        </div>
+        <div id="status-list" class="status-list"></div>
+      </section>
+    </main>
+  </div>
+  <dialog id="vehicle-dialog">
+    <form id="vehicle-form" class="vehicle-form">
+      <div class="dialog-heading"><div><p class="eyebrow">FLEET DETAILS</p><h2 id="dialog-title">車両を追加</h2></div><button type="button" id="close-dialog" class="close-button" aria-label="閉じる">×</button></div>
+      <input type="hidden" name="id">
+      <label>ナンバー<input name="plate" required maxlength="40" placeholder="例: 品川 500 あ 1234"></label>
+      <div class="form-row">
+        <label>車種・タイプ<select name="vehicle_type" required></select></label>
+        <p class="default-location-note">追加した車両は「予備」に登録されます。</p>
+      </div>
+      <fieldset class="option-fields"><legend>オプション</legend>
+        <label class="check-label"><input type="checkbox" name="options" value="ETC">ETC</label>
+        <label class="check-label"><input type="checkbox" name="options" value="車載器">車載器</label>
+        <label class="check-label"><input type="checkbox" name="options" value="禁煙">禁煙</label>
+        <label class="check-label"><input type="checkbox" name="options" value="喫煙">喫煙</label>
+        <label class="check-label"><input type="checkbox" name="options" value="ナビ">ナビ</label>
+        <label class="check-label"><input type="checkbox" name="options" value="スタッドレス">スタッドレス</label>
+      </fieldset>
+      <fieldset class="status-fields"><legend>対応ステータス</legend>
+        <label class="check-label"><input type="checkbox" name="unwashed">洗車待ち</label>
+        <label class="check-label"><input type="checkbox" name="no_fuel">給油待ち</label>
+        <label class="check-label"><input type="checkbox" name="needs_repair">要修理</label>
+      </fieldset>
+      <p id="form-error" class="error-message" role="alert"></p>
+      <div class="dialog-actions"><button type="button" id="delete-vehicle" class="danger-button" hidden>車両を削除</button><span></span><button type="button" id="cancel-dialog" class="quiet-button">キャンセル</button><button type="submit" class="primary-button">保存</button></div>
+    </form>
+  </dialog>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
