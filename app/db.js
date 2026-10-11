@@ -23,6 +23,7 @@ function openDatabase(databasePath) {
       id INTEGER PRIMARY KEY,
       username TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'admin' CHECK(role IN ('admin', 'operator')),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS parking_lots (
@@ -60,7 +61,11 @@ function openDatabase(databasePath) {
     CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions(expires);
   `);
   const columns = new Set(db.prepare("PRAGMA table_info(vehicles)").all().map((column) => column.name));
+  const userColumns = new Set(db.prepare("PRAGMA table_info(users)").all().map((column) => column.name));
   const lotColumns = new Set(db.prepare("PRAGMA table_info(parking_lots)").all().map((column) => column.name));
+  if (!userColumns.has("role")) {
+    db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin' CHECK(role IN ('admin', 'operator'))");
+  }
   if (!lotColumns.has("display_order")) {
     db.exec("ALTER TABLE parking_lots ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0");
     db.exec("UPDATE parking_lots SET display_order = id - 1");

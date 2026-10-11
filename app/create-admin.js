@@ -35,14 +35,15 @@ async function readHidden(question) {
   });
 }
 
-async function main() {
+async function main(role = "admin") {
+  if (!["admin", "operator"].includes(role)) throw new Error("Account role must be admin or operator.");
   if (!stdin.isTTY || !stdout.isTTY) {
     throw new Error("Run this command from an interactive terminal so the password can be hidden.");
   }
   const rl = readline.createInterface({ input: stdin, output: stdout });
   let username;
   try {
-    username = (await rl.question("Admin username: ")).trim();
+    username = (await rl.question(`${role === "admin" ? "Admin" : "Operator"} username: `)).trim();
   } finally {
     rl.close();
   }
@@ -55,15 +56,15 @@ async function main() {
   const databasePath = process.env.DATABASE_PATH || "data/rentalcar.db";
   const db = openDatabase(databasePath);
   try {
-    const insertUser = db.prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)");
-    insertUser.run(username, await hashPassword(password));
+    const insertUser = db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)");
+    insertUser.run(username, await hashPassword(password), role);
   } catch (error) {
     if (error.code === "SQLITE_CONSTRAINT_UNIQUE") throw new Error("That username already exists.");
     throw error;
   } finally {
     db.close();
   }
-  console.log(`Created user ${username}.`);
+  console.log(`Created ${role} account ${username}.`);
 }
 
 if (require.main === module) {

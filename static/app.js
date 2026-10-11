@@ -15,6 +15,7 @@
   let lots = [];
   let vehicles = [];
   let vehicleTypes = [];
+  let canManage = false;
   let activeVehicleType = "all";
   let activeStatus = "all";
   let socket;
@@ -41,10 +42,13 @@
     if (socket) socket.close();
   }
 
-  function showBoard(username) {
+  function showBoard(username, userCanManage) {
     loginScreen.hidden = true;
     appScreen.hidden = false;
+    canManage = userCanManage;
     document.querySelector("#current-user").textContent = username;
+    document.querySelector("#manage-locations-button").hidden = !canManage;
+    document.querySelector("#add-vehicle-button").hidden = !canManage;
     connectSocket();
     loadBoard().catch(showError);
   }
@@ -90,9 +94,13 @@
     card.dataset.lotId = lot.id;
     const heading = document.createElement("div");
     heading.className = "lot-heading";
-    heading.draggable = true;
-    heading.title = "エリアカードをドラッグして並べ替え";
+    heading.draggable = canManage;
+    heading.title = canManage ? "エリアカードをドラッグして並べ替え" : "";
     heading.addEventListener("dragstart", (event) => {
+      if (!canManage) {
+        event.preventDefault();
+        return;
+      }
       if (event.target.closest("button, a, input")) {
         event.preventDefault();
         return;
@@ -103,12 +111,13 @@
     });
     heading.addEventListener("dragend", () => card.classList.remove("reordering"));
     card.addEventListener("dragover", (event) => {
-      if (event.dataTransfer.types.includes("text/plain")) {
+      if (canManage && event.dataTransfer.types.includes("text/plain")) {
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
       }
     });
     card.addEventListener("drop", (event) => {
+      if (!canManage) return;
       event.preventDefault();
       const sourceId = Number(event.dataTransfer.getData("text/plain"));
       if (sourceId && sourceId !== lot.id) reorderLots(sourceId, lot.id).catch(showError);
@@ -138,21 +147,23 @@
       headingTitle.append(navigationIcon);
     }
     heading.append(headingTitle);
-    const controls = document.createElement("div");
-    controls.className = "lot-controls";
-    const resize = document.createElement("button");
-    resize.type = "button";
-    resize.className = "lot-control";
-    resize.textContent = "サイズ調整";
-    resize.title = "クリック後、右下のハンドルをドラッグしてサイズを調整";
-    resize.addEventListener("click", () => {
-      card.classList.toggle("size-editing");
-      resize.textContent = card.classList.contains("size-editing") ? "完了" : "サイズ調整";
-    });
-    const earlier = makeLotControl("←", "左へ移動", () => moveLot(lot.id, -1));
-    const later = makeLotControl("→", "右へ移動", () => moveLot(lot.id, 1));
-    controls.append(resize, earlier, later);
-    heading.append(controls);
+    if (canManage) {
+      const controls = document.createElement("div");
+      controls.className = "lot-controls";
+      const resize = document.createElement("button");
+      resize.type = "button";
+      resize.className = "lot-control";
+      resize.textContent = "サイズ調整";
+      resize.title = "クリック後、右下のハンドルをドラッグしてサイズを調整";
+      resize.addEventListener("click", () => {
+        card.classList.toggle("size-editing");
+        resize.textContent = card.classList.contains("size-editing") ? "完了" : "サイズ調整";
+      });
+      const earlier = makeLotControl("←", "左へ移動", () => moveLot(lot.id, -1));
+      const later = makeLotControl("→", "右へ移動", () => moveLot(lot.id, 1));
+      controls.append(resize, earlier, later);
+      heading.append(controls);
+    }
     const area = document.createElement("div");
     area.className = "lot-area";
     area.dataset.lotId = lot.id;
@@ -160,14 +171,16 @@
     card.style.setProperty("--lot-width", `${lot.area_width}%`);
     if (!inLot.length) area.classList.add("empty");
     for (const vehicle of inLot) area.append(makeToken(vehicle));
-    const resizeHandle = document.createElement("button");
-    resizeHandle.type = "button";
-    resizeHandle.className = "lot-resize-handle";
-    resizeHandle.textContent = "◢";
-    resizeHandle.setAttribute("aria-label", `${lot.name}のサイズをドラッグして調整`);
-    resizeHandle.title = "ドラッグして幅と高さを調整";
-    resizeHandle.addEventListener("pointerdown", (event) => startResize(event, lot, card, area));
-    area.append(resizeHandle);
+    if (canManage) {
+      const resizeHandle = document.createElement("button");
+      resizeHandle.type = "button";
+      resizeHandle.className = "lot-resize-handle";
+      resizeHandle.textContent = "◢";
+      resizeHandle.setAttribute("aria-label", `${lot.name}のサイズをドラッグして調整`);
+      resizeHandle.title = "ドラッグして幅と高さを調整";
+      resizeHandle.addEventListener("pointerdown", (event) => startResize(event, lot, card, area));
+      area.append(resizeHandle);
+    }
     card.append(heading, area);
     return card;
   }
@@ -521,12 +534,14 @@
   }
 
   function openLocationManager() {
+    if (!canManage) return;
     locationError.textContent = "";
     renderLocationManager();
     locationDialog.showModal();
   }
 
   function openVehicle(vehicle = null) {
+    if (!vehicle && !canManage) return;
     vehicleForm.reset();
     formError.textContent = "";
     document.querySelector("#dialog-title").textContent = vehicle ? "車両情報を編集" : "車両を追加";
@@ -570,7 +585,7 @@
         body: JSON.stringify({ username: form.get("username"), password: form.get("password") }),
       });
       loginForm.reset();
-      showBoard(result.username);
+      showBoard(result.username, result.can_manage);
     } catch (error) {
       loginError.textContent = error.message;
     }
@@ -650,7 +665,7 @@
     });
   });
   api("/api/me").then((result) => {
-    if (result.authenticated) showBoard(result.username);
+    if (result.authenticated) showBoard(result.username, result.can_manage);
     else showLogin();
   }).catch(showLogin);
 })();
