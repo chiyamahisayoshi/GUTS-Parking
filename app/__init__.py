@@ -1,1 +1,0 @@
-"""Rental car live board."""

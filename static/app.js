@@ -71,6 +71,7 @@
       card.querySelector(".lot-count").textContent = `${inLot.length} 台`;
       const area = card.querySelector(".lot-area");
       area.dataset.lotId = lot.id;
+      area.style.height = `${Math.max(210, Math.ceil(inLot.length / 4) * 52 + 24)}px`;
       if (inLot.length === 0) area.classList.add("empty");
       for (const vehicle of inLot) area.append(makeToken(vehicle));
       parkingGrid.append(card);
@@ -119,7 +120,6 @@
     dragged = {
       id: Number(token.dataset.id),
       token,
-      sourceArea: token.closest(".lot-area"),
       startX: event.clientX,
       startY: event.clientY,
       moved: false,
@@ -136,6 +136,7 @@
     if (!dragged.moved) return;
     dragged.token.classList.add("dragging");
     if (dragged.token.parentElement !== document.body) document.body.append(dragged.token);
+    dragged.token.style.pointerEvents = "none";
     dragged.token.style.left = `${event.clientX}px`;
     dragged.token.style.top = `${event.clientY}px`;
     dragged.token.style.position = "fixed";
@@ -151,15 +152,14 @@
     suppressClick = true;
     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".lot-area");
     const vehicle = vehicles.find((item) => item.id === current.id);
-    const lot = target
-      ? lots.find((item) => item.id === Number(target.dataset.lotId))
-      : lots.find((item) => item.id === vehicle.parking_lot_id);
+    const lot = target && lots.find((item) => item.id === Number(target.dataset.lotId));
     if (!lot) {
       current.token.remove();
       await loadBoard();
+      suppressClick = false;
       return;
     }
-    const area = target || current.sourceArea;
+    const area = target;
     const rect = area.getBoundingClientRect();
     const positionX = Math.max(0, Math.min(1, (event.clientX - rect.left - rect.width * 0.08) / (rect.width * 0.84)));
     const positionY = Math.max(0, Math.min(1, (event.clientY - rect.top - rect.height * 0.1) / (rect.height * 0.8)));
