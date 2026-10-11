@@ -6,138 +6,130 @@ ERP 后续可通过稳定的 `external_id` 和可选 API key 保护的同步接�
 
 ## 通过宝塔面板部署 (Debian 12)
 
-以下使用示例域名 `board.example.com`。请先购买/准备域名，并将 DNS A 记录指向 VPS 公网 IP；后续操作中的域名、面板安全端口、管理员用户名按你的实际环境替换。
+本指南以只用 VPS 公网 IP、暂时不使用域名为例。网站和应用不需要 MySQL：程序使用 SQLite 文件。Node 应用只监听本机 `127.0.0.1:8000`，不要在防火墙开放 8000。
 
 ### 1. 安装宝塔和准备 VPS
 
-在 VPS 服务商控制台的防火墙/安全组中先开放 TCP **22、80、443 和你自行设置的宝塔面板端口**。8000 端口不应向公网开放。
+在 VPS 服务商防火墙开放 TCP **22、80** 和宝塔面板端口。通过 SSH 登录 Debian 12 后，使用宝塔官网当前提供的 Debian 安装命令安装面板。
 
-SSH 到 Debian 12 VPS，按宝塔官网“Linux 面板安装”页面为 Debian 提供的**最新官方命令**安装面板。安装命令会随面板版本变化，因此不要复制不明来源的旧安装脚本。安装后保存终端给出的面板地址、登录用户名和密码，并用浏览器登录；首次登录建议完成面板安全入口/端口设置。
-
-在宝塔左侧“软件商店”安装并启动 **Nginx**。随后安装 **Node.js 版本管理器**（有些版本/插件页面会把它叫做 Node.js 版本管理器或 Node 项目管理器）；在插件里安装 **Node.js 24.x**。本项目需要 Node 24，因为数据库使用 Node 自带的 `node:sqlite`。如果插件把“版本管理”和“项目管理”拆成两个插件，请都安装。无需安装 Python、MySQL 或 Redis。
+在宝塔左侧“软件商店”安装并启动 **Nginx**，再安装 **Node.js 版本管理器**并用它安装 **Node.js 24.x**。宝塔的 Node.js 版本管理器和 PM2 管理器插件可能互斥；本指南使用版本管理器随附的 `pm2` 命令，不要再安装 PM2 管理器。无需安装 Python、MySQL 或 Redis。
 
 ### 2. 添加网站并上传/克隆项目
 
-在宝塔“网站”中添加站点：
+在宝塔“网站”中添加站点：域名栏填写 VPS 公网 IP（例如 `43.133.161.210`），目录使用默认值，PHP 选“纯静态/不使用 PHP”，数据库选“无/不创建”，FTP 不创建。网站目录仅作为 Nginx 入口；应用代码与数据库放在单独目录。
 
-- 域名：`board.example.com`
-- 网站目录：使用宝塔建议的默认目录即可
-- PHP 版本：纯静态/不使用 PHP（应用由 Node 运行）
-- 数据库：不创建
-
-部署代码时可在宝塔“终端”或 SSH 终端执行。先确认宝塔终端中能找到 Node.js 24：
-
-```bash
-node --version
-npm --version
-```
-
-如果显示的 Node 不是 24.x，请在 Node.js 版本管理器中切换到 24.x，并按插件显示的 Node/npm 命令路径执行以下命令。PR 合并后从 `main` 获取代码：
+以下命令假设 Node 版本管理器安装路径为 `/www/server/nodejs/v24.21.0`，应用运行用户为宝塔常见的 `www`。如果实际安装路径或用户不同，请替换为面板显示的值。PR 合并后从 `main` 获取代码：
 
 ```bash
 git clone https://github.com/chiyamahisayoshi/rentalcar.git /www/wwwroot/rentalcar-app
-cd /www/wwwroot/rentalcar-app
-npm ci --omit=dev
-```
-
-如果代码还没有合并到 `main`，暂时测试 PR 的话把 clone 命令改为：
-
-```bash
-git clone --branch chiyamahisayoshi-rentalcar-live-board https://github.com/chiyamahisayoshi/rentalcar.git /www/wwwroot/rentalcar-app
-```
-
-私有仓库请使用只读 Deploy Key 或面板/服务器已配置的 Git 凭据；不要把 GitHub Token 写在命令、网页文件或截图中。
-
-创建数据库目录并设置宝塔网站常用的运行用户 `www` 可读写：
-
-```bash
 mkdir -p /www/wwwroot/rentalcar-data
-chown -R www:www /www/wwwroot/rentalcar-data
+chown -R www:www /www/wwwroot/rentalcar-app /www/wwwroot/rentalcar-data
 chmod 750 /www/wwwroot/rentalcar-data
-chown -R www:www /www/wwwroot/rentalcar-app
 ```
 
-如果你的宝塔系统使用了不同的站点运行用户，请将 `www:www` 换成面板显示的实际用户和组。
+PR 尚未合并到 `main`、需要测试当前 PR 时，用下面命令代替上面的 `git clone` 命令：
+
+```bash
+git clone --branch chiyamahisayoshi-rentalcar-live-board --single-branch https://github.com/chiyamahisayoshi/rentalcar.git /www/wwwroot/rentalcar-app
+```
+
+以 `www` 用户安装依赖，并使用独立 npm 缓存目录，避免 root 与 `www` 混用 npm 后产生缓存权限错误：
+
+```bash
+mkdir -p /www/wwwroot/rentalcar-data/npm-cache
+chown -R www:www /www/wwwroot/rentalcar-app /www/wwwroot/rentalcar-data
+su -s /bin/sh www -c 'export PATH=/www/server/nodejs/v24.21.0/bin:$PATH; cd /www/wwwroot/rentalcar-app && npm ci --omit=dev --cache /www/wwwroot/rentalcar-data/npm-cache'
+```
+
+只有看到 `added ... packages` 且没有 `npm error` 才继续。npm 若显示 `Unknown global config "--init.module"` 警告但安装成功，可以暂时忽略。
 
 ### 3. 建立环境配置并创建管理员账号
 
-在宝塔“文件”中新建 `/www/wwwroot/rentalcar-app/.env`。先在宝塔“终端”运行以下命令生成随机会话密钥：
+下面整段命令会生成随机会话密钥、写好 `.env`，并启动管理员创建提示。不要把 `.env` 内容或管理员密码发给别人。
 
 ```bash
-node -e 'console.log(require("node:crypto").randomBytes(48).toString("base64url"))'
-```
-
-将生成的值填入 `.env`，不要把密钥发送给别人或提交到 Git：
-
-```dotenv
-SESSION_SECRET=替换为刚生成的随机密钥
-DATABASE_PATH=/www/wwwroot/rentalcar-data/rentalcar.db
-COOKIE_SECURE=1
-# ERP 尚未对接时留空；启用时换成另一条独立的随机密钥
-ERP_API_KEY=
-```
-
-保护配置文件并创建首个管理员账号。下面假设宝塔运行用户是 `www`：
-
-```bash
+cd /www/wwwroot/rentalcar-app
+NODE=/www/server/nodejs/v24.21.0/bin/node
+SECRET=$("$NODE" -e 'console.log(require("node:crypto").randomBytes(48).toString("base64url"))')
+printf 'SESSION_SECRET=%s\nDATABASE_PATH=/www/wwwroot/rentalcar-data/rentalcar.db\nCOOKIE_SECURE=0\nERP_API_KEY=\n' "$SECRET" > .env
 chown www:www /www/wwwroot/rentalcar-app/.env
 chmod 600 /www/wwwroot/rentalcar-app/.env
-cd /www/wwwroot/rentalcar-app
-sudo -u www node app/create-admin.js
+su -s /bin/sh www -c 'cd /www/wwwroot/rentalcar-app && /www/server/nodejs/v24.21.0/bin/node app/create-admin.js'
 ```
 
-命令会从 `.env` 读取数据库位置，并在终端中隐藏管理员密码输入。密码至少 12 个字符，请用密码管理器保存。再次运行命令可增加其他唯一用户名的操作员。应用首次运行时会自动创建数据库及 9 个停车区域。
+按提示输入管理员用户名和密码。密码至少 12 个字符；输入时终端不显示字符是正常的。应用启动时会自动创建 SQLite 数据库和 9 个停车区域。再次运行最后一条管理员创建命令可添加其他账号。
 
-### 4. 用宝塔 Node.js 项目管理器启动应用
+### 4. 用 PM2 启动应用
 
-打开宝塔左侧“软件商店”安装的 **Node.js 项目管理器**，添加 Node 项目。不同宝塔/插件版本字段名称可能略有差别，按下面值填写：
-
-| 项目设置 | 值 |
-| --- | --- |
-| 项目名称 | `rentalcar` |
-| 项目路径 / 项目目录 | `/www/wwwroot/rentalcar-app` |
-| 启动文件 | `app/server.js` |
-| Node 版本 | `24.x` |
-| 启动模式 | 正式 / production |
-| 监听地址 | `127.0.0.1`（若插件只有端口设置，应用本身默认绑定 `127.0.0.1`） |
-| 项目端口 | `8000` |
-
-依赖已在前一步用 `npm ci --omit=dev` 安装。项目启动后，在宝塔“终端”验证：
+使用 Node.js 版本管理器随附的 PM2 命令启动单个进程；不要额外安装可能互斥的 PM2 管理器插件：
 
 ```bash
-curl -I http://127.0.0.1:8000/
+su -s /bin/sh www -c 'export PATH=/www/server/nodejs/v24.21.0/bin:$PATH; export PM2_HOME=/www/wwwroot/rentalcar-data/.pm2; cd /www/wwwroot/rentalcar-app && pm2 start app/server.js --name rentalcar --interpreter /www/server/nodejs/v24.21.0/bin/node'
 ```
 
-看到 `HTTP/1.1 200 OK` 即表示 Node 应用已启动。宝塔 Node 项目管理器需要保持**单个应用进程/一个 worker**；实时 WebSocket 通知依赖同一 Node 进程内的连接状态。若启动失败，先检查插件的项目日志、Node 24 是否生效、`.env` 权限及 `DATABASE_PATH` 的目录权限。
+运行 `curl -I http://127.0.0.1:8000/`，看到 `HTTP/1.1 200 OK` 表示程序已启动。然后保存 PM2 进程清单：
 
-### 5. 在宝塔网站设置反向代理、WebSocket 和 HTTPS
+```bash
+su -s /bin/sh www -c 'export PATH=/www/server/nodejs/v24.21.0/bin:$PATH; export PM2_HOME=/www/wwwroot/rentalcar-data/.pm2; pm2 save'
+```
 
-回到宝塔“网站”列表，打开 `board.example.com` 的“设置”：
+如需 VPS 重启后自动启动，在宝塔“计划任务”新增启动时执行的 Shell 任务，命令为：
 
-1. 在“反向代理”中新增代理，名称如 `rentalcar-node`，目标 URL 填 `http://127.0.0.1:8000`，发送域名选择 `$host`/当前站点域名。
-2. 开启该代理项的 **WebSocket 支持**（如果显示为 WebSocket 反向代理或 WebSocket 转发，也要开启）。这是多人实时同步必需的。
-3. 在“SSL”中选择 Let’s Encrypt，勾选该域名并申请证书；签发成功后开启“强制 HTTPS”。
+```bash
+su -s /bin/sh www -c 'export PATH=/www/server/nodejs/v24.21.0/bin:$PATH; export PM2_HOME=/www/wwwroot/rentalcar-data/.pm2; pm2 resurrect'
+```
 
-申请证书前，请确认 DNS 已生效，云防火墙和宝塔“安全”中都开放 TCP 80、443。不要再为网站配置 PHP，也不要把 8000 加进公网防火墙规则。生产 `.env` 的 `COOKIE_SECURE=1` 需要与 HTTPS 同时使用。
+保持单进程；WebSocket 实时刷新依赖同一个应用进程。
 
-### 6. 登录验收和录入车辆
+### 5. 在宝塔网站设置反向代理
 
-浏览器访问 `https://board.example.com`，用刚创建的账号登录，然后录入真实车辆。建议用两个浏览器同时登录，测试添加/编辑车辆、拖到其他停车区、洗车/给油/修理状态筛选，确认另一浏览器能实时更新。
+在宝塔“网站”列表打开 IP 站点的“设置”→“反向代理”→“添加反向代理”，填写：
+
+| 页面项目 | 填写内容 |
+| --- | --- |
+| 代理名称 | `rentalcar` |
+| 目标 URL | `http://127.0.0.1:8000` |
+| 发送域名 | `$host` |
+| 开启代理 | 开 |
+| 开启缓存 | 关 |
+| 内容替换 | 留空 |
+
+保存后确认代理状态是“运行中”。如果页面没有 WebSocket 开关，打开代理的“配置文件”，在 `location /` 代理配置块中确认有以下三行；已有就不要重复添加：
+
+```nginx
+proxy_http_version 1.1;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+```
+
+访问 `http://你的VPS公网IP`。打开 `/api/me` 若显示 `{"authenticated":false}`，代表入口和代理正常；首页应显示登录页面。
+
+### 6. 登录验收与 HTTP 安全
+
+用刚创建的账号登录，然后录入真实车辆。仅 IP 的 HTTP 访问不会加密登录密码，建议只在可信网络使用。HTTP 模式 `.env` 必须是 `COOKIE_SECURE=0`；若以后启用 HTTPS，再改成 `COOKIE_SECURE=1` 并重启应用。不要公开应用 8000 端口；宝塔面板端口最好限制为自己的 IP。
 
 ### 备份与更新
 
-车辆、用户和会话数据库在 `/www/wwwroot/rentalcar-data/rentalcar.db`，不在公开的网站目录内。可在宝塔计划任务设置每日备份，将以下命令的备份目标改到另一个磁盘/远端存储；备份应限制访问并定期复制到 VPS 以外：
+数据库在 `/www/wwwroot/rentalcar-data/rentalcar.db`，不在公开的网站目录内。用宝塔计划任务定期备份此目录，并把副本保存到 VPS 以外。
+
+更新前先备份。在宝塔终端运行：
 
 ```bash
-sudo -u www node -e '
-const { DatabaseSync, backup } = require("node:sqlite");
-const source = new DatabaseSync("/www/wwwroot/rentalcar-data/rentalcar.db", { readOnly: true });
-backup(source, "/www/wwwroot/rentalcar-data/backup.db")
-  .catch((error) => { console.error(error); process.exitCode = 1; })
-  .finally(() => source.close());'
+su -s /bin/sh www -c 'export PATH=/www/server/nodejs/v24.21.0/bin:$PATH; export PM2_HOME=/www/wwwroot/rentalcar-data/.pm2; cd /www/wwwroot/rentalcar-app && git pull --ff-only && npm ci --omit=dev --cache /www/wwwroot/rentalcar-data/npm-cache && pm2 restart rentalcar'
 ```
 
-更新前先备份。在宝塔终端运行 `git pull --ff-only` 与 `npm ci --omit=dev`，再到 Node.js 项目管理器重启 `rentalcar` 项目。若程序或项目设置在更新后发生变化，检查 Node 项目管理器日志。Node 项目只监听 VPS 本机；当前单进程和 SQLite 适合一台 VPS 与约 250 台车。将来扩容到多个应用进程/服务器时，应改用共享数据库与消息通道。
+当前单进程和 SQLite 适合单台 VPS 与约 250 台车。扩展到多进程/多服务器时，应改用共享数据库与消息通道。
+
+### 常见部署问题
+
+- **网站数据库选项**：选“无/不创建”。应用使用 SQLite 文件，不使用 MySQL。
+- **`node: command not found`**：宝塔 Node 不一定在 root 的 PATH；使用 `/www/server/nodejs/v24.21.0/bin/node` 完整路径，并将该目录加入运行命令的 PATH。
+- **`sudo: command not found`**：宝塔系统可能没有 sudo。用 `su -s /bin/sh www -c '命令'` 以 `www` 用户运行。
+- **`Cannot find module 'dotenv'`**：依赖没有安装完整。先成功完成 `npm ci --omit=dev`，再创建管理员或启动应用。
+- **npm cache `EACCES` / `root-owned files`**：不要以 root 和 `www` 混用 npm 缓存；按上文将项目归 `www` 所有，并指定 `/www/wwwroot/rentalcar-data/npm-cache`。
+- **Node 版本管理器与 PM2 管理器互斥**：只用版本管理器附带的 PM2 命令。
+- **`.env` 变量名里出现反斜线**：必须写作 `SESSION_SECRET`、`DATABASE_PATH`，不要写成 `SESSION\_SECRET`。复制上面的代码块可避免手动输入错误。
+- **`/api/me` 能返回 JSON，但首页空白**：更新到修复 HTTP 安全策略的版本；纯 HTTP 使用 `COOKIE_SECURE=0`。
 
 ## 本地开发和测试
 
@@ -154,4 +146,4 @@ npm start
 
 ## ERP 同步接口
 
-在 `.env` 配置 `ERP_API_KEY` 后，ERP 使用 `POST /api/integration/vehicles:sync`，并在 `X-ERP-API-Key` 请求头发送密钥。请求 JSON 为数组，每项包含 `external_id`、`plate`、`vehicle_type`，以及可选 `parking_lot_id`。相同 `external_id` 重复同步时会更新基础车辆资料，但不覆盖看板状态和位置；每批最多 500 台。未设置密钥时接口返回 503。密钥更新后在宝塔 Node.js 项目管理器重启项目。
+在 `.env` 配置 `ERP_API_KEY` 后，ERP 使用 `POST /api/integration/vehicles:sync`，并在 `X-ERP-API-Key` 请求头发送密钥。请求 JSON 为数组，每项包含 `external_id`、`plate`、`vehicle_type`，以及可选 `parking_lot_id`。相同 `external_id` 重复同步时会更新基础车辆资料，但不覆盖看板状态和位置；每批最多 500 台。未设置密钥时接口返回 503。密钥更新后通过 PM2 重启应用。

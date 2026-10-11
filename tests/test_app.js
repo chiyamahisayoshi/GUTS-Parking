@@ -56,6 +56,21 @@ test("serves the browser UI but protects vehicle data until login", async () => 
   assert.equal((await agent.get("/api/bootstrap")).status, 401);
 });
 
+test("keeps HTTPS asset upgrades enabled when secure cookies are configured", async () => {
+  const secureApplication = createApplication({
+    databasePath: ":memory:",
+    sessionSecret: "test-only-session-secret-value-123456",
+    cookieSecure: true,
+  });
+  try {
+    const response = await request(secureApplication.app).get("/");
+    assert.equal(response.status, 200);
+    assert.match(response.headers["content-security-policy"], /upgrade-insecure-requests/);
+  } finally {
+    secureApplication.db.close();
+  }
+});
+
 test("logs in with hashed credentials and seeds the nine lots", async () => {
   assert.equal((await agent.post("/api/login").send({
     username: "operator",
