@@ -7,6 +7,8 @@
   const dialog = document.querySelector("#vehicle-dialog");
   const vehicleForm = document.querySelector("#vehicle-form");
   const formError = document.querySelector("#form-error");
+  const locationDialog = document.querySelector("#location-dialog");
+  const locationError = document.querySelector("#location-error");
   const statuses = ["unwashed", "no_fuel", "needs_repair"];
   const statusLabels = { unwashed: "洗車待ち", no_fuel: "給油待ち", needs_repair: "要修理" };
   const statusIcons = { unwashed: "🫧", no_fuel: "⛽", needs_repair: "🔧" };
@@ -17,6 +19,7 @@
   let activeStatus = "all";
   let socket;
   let dragged = null;
+  let resizing = null;
   let suppressClick = false;
 
   async function api(path, options = {}) {
@@ -52,7 +55,7 @@
   }
 
   async function loadBoard() {
-    if (dragged) return;
+    if (dragged || resizing) return;
     const data = await api("/api/bootstrap");
     lots = data.parking_lots;
     vehicles = data.vehicles;
@@ -125,38 +128,95 @@
     resize.type = "button";
     resize.className = "lot-control";
     resize.textContent = "尺寸";
-    resize.title = "顯示尺寸調整按鈕";
+    resize.title = "クリック後、右下のハンドルをドラッグしてサイズを調整";
     resize.addEventListener("click", () => {
       card.classList.toggle("size-editing");
       resize.textContent = card.classList.contains("size-editing") ? "完成" : "尺寸";
     });
-    const shorter = makeLotControl("−", "減少高度", () => updateLotLayout(lot, {
-      area_height: Math.max(160, lot.area_height - 40),
-    }));
-    const taller = makeLotControl("+", "增加高度", () => updateLotLayout(lot, {
-      area_height: Math.min(600, lot.area_height + 40),
-    }));
-    const width = makeLotControl(lot.area_width === 2 ? "窄" : "寬", "切換寬度", () =>
-      updateLotLayout(lot, { area_width: lot.area_width === 2 ? 1 : 2 }));
     const earlier = makeLotControl("←", "向前移一格", () => moveLot(lot.id, -1));
     const later = makeLotControl("→", "向後移一格", () => moveLot(lot.id, 1));
-    controls.append(resize, shorter, taller, width, earlier, later);
+    controls.append(resize, earlier, later);
     heading.append(controls);
     const area = document.createElement("div");
     area.className = "lot-area";
     area.dataset.lotId = lot.id;
     area.style.height = `${Math.max(lot.area_height, Math.ceil(inLot.length / 4) * 52 + 24)}px`;
-    if (lot.area_width === 2) card.classList.add("lot-wide");
+    card.style.setProperty("--lot-width", `${lot.area_width}%`);
     if (!inLot.length) area.classList.add("empty");
     for (const vehicle of inLot) area.append(makeToken(vehicle));
+    const resizeHandle = document.createElement("button");
+    resizeHandle.type = "button";
+    resizeHandle.className = "lot-resize-handle";
+    resizeHandle.textContent = "◢";
+    resizeHandle.setAttribute("aria-label", `${lot.name}のサイズをドラッグして調整`);
+    resizeHandle.title = "ドラッグして幅と高さを調整";
+    resizeHandle.addEventListener("pointerdown", (event) => startResize(event, lot, card, area));
+    area.append(resizeHandle);
     card.append(heading, area);
     return card;
+  }
+
+  function startResize(event, lot, card, area) {
+    if (event.button !== 0 || resizing) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const gridWidth = parkingGrid.getBoundingClientRect().width;
+    if (!gridWidth) return;
+    resizing = {
+      lot,
+      card,
+      area,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      width: lot.area_width,
+      height: area.getBoundingClientRect().height,
+      gridWidth,
+      nextWidth: lot.area_width,
+      nextHeight: area.getBoundingClientRect().height,
+    };
+    card.classList.add("resizing");
+  }
+
+  function moveResize(event) {
+    if (!resizing || event.pointerId !== resizing.pointerId) return;
+    const nextWidth = Math.max(30, Math.min(100,
+      Math.round(resizing.width + (event.clientX - resizing.startX) / resizing.gridWidth * 100)));
+    const nextHeight = Math.max(160, Math.min(600,
+      resizing.height + event.clientY - resizing.startY));
+    resizing.nextWidth = nextWidth;
+    resizing.nextHeight = nextHeight;
+    resizing.card.style.setProperty("--lot-width", `${nextWidth}%`);
+    resizing.area.style.height = `${nextHeight}px`;
+  }
+
+  async function endResize(event, cancelled = false) {
+    if (!resizing || event.pointerId !== resizing.pointerId) return;
+    const current = resizing;
+    resizing = null;
+    current.card.classList.remove("resizing");
+    if (cancelled) {
+      current.card.style.setProperty("--lot-width", `${current.width}%`);
+      current.area.style.height = `${current.height}px`;
+      return;
+    }
+    if (current.nextWidth === current.width && current.nextHeight === current.height) return;
+    try {
+      await updateLotLayout(current.lot, {
+        area_width: current.nextWidth,
+        area_height: Math.round(current.nextHeight),
+      });
+    } catch (error) {
+      showError(error);
+      current.card.style.setProperty("--lot-width", `${current.width}%`);
+      current.area.style.height = `${current.height}px`;
+    }
   }
 
   function makeLotControl(label, title, onClick) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "lot-control size-control";
+    button.className = "lot-control layout-control";
     button.textContent = label;
     button.title = title;
     button.addEventListener("click", (event) => {
@@ -302,8 +362,11 @@
   }
 
   document.addEventListener("pointermove", moveDrag);
+  document.addEventListener("pointermove", moveResize);
   document.addEventListener("pointerup", (event) => endDrag(event));
+  document.addEventListener("pointerup", (event) => endResize(event));
   document.addEventListener("pointercancel", (event) => endDrag(event, true));
+  document.addEventListener("pointercancel", (event) => endResize(event, true));
 
   function populateVehicleTypeChoices() {
     const select = vehicleForm.elements.vehicle_type;
@@ -400,6 +463,47 @@
     }
   }
 
+  function renderLocationManager() {
+    const list = document.querySelector("#location-list");
+    list.replaceChildren();
+    for (const lot of lots) {
+      const row = document.createElement("div");
+      row.className = "location-row";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.maxLength = 40;
+      input.required = true;
+      input.value = lot.name;
+      input.setAttribute("aria-label", `${lot.name}の位置名`);
+      const save = document.createElement("button");
+      save.type = "button";
+      save.className = "quiet-button";
+      save.textContent = "名前を保存";
+      save.addEventListener("click", async () => {
+        locationError.textContent = "";
+        if (!input.reportValidity()) return;
+        try {
+          await api(`/api/parking-lots/${lot.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ name: input.value }),
+          });
+          await loadBoard();
+          renderLocationManager();
+        } catch (error) {
+          locationError.textContent = error.message;
+        }
+      });
+      row.append(input, save);
+      list.append(row);
+    }
+  }
+
+  function openLocationManager() {
+    locationError.textContent = "";
+    renderLocationManager();
+    locationDialog.showModal();
+  }
+
   function openVehicle(vehicle = null) {
     vehicleForm.reset();
     formError.textContent = "";
@@ -459,6 +563,25 @@
     }
   });
   document.querySelector("#add-vehicle-button").addEventListener("click", () => openVehicle());
+  document.querySelector("#manage-locations-button").addEventListener("click", openLocationManager);
+  document.querySelector("#close-location-dialog").addEventListener("click", () => locationDialog.close());
+  document.querySelector("#add-location-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    locationError.textContent = "";
+    const form = event.currentTarget;
+    const nameInput = form.elements.name;
+    try {
+      await api("/api/parking-lots", {
+        method: "POST",
+        body: JSON.stringify({ name: nameInput.value }),
+      });
+      form.reset();
+      await loadBoard();
+      renderLocationManager();
+    } catch (error) {
+      locationError.textContent = error.message;
+    }
+  });
   document.querySelector("#close-dialog").addEventListener("click", () => dialog.close());
   document.querySelector("#cancel-dialog").addEventListener("click", () => dialog.close());
   document.querySelector("#delete-vehicle").addEventListener("click", async () => {

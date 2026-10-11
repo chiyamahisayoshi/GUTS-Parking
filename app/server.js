@@ -251,30 +251,69 @@ function createApplication(options = {}) {
     });
   });
 
+  app.post("/api/parking-lots", requireUser, requireSameOrigin, (request, response, next) => {
+    const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
+    if (!name || name.length > 40) {
+      return response.status(422).json({ detail: "Parking location name must be between 1 and 40 characters." });
+    }
+    if (db.prepare("SELECT 1 FROM parking_lots WHERE name = ? COLLATE NOCASE").get(name)) {
+      return response.status(409).json({ detail: "A parking location with that name already exists." });
+    }
+    try {
+      const result = db.prepare(`
+        INSERT INTO parking_lots (name, display_order, area_height, area_width)
+        VALUES (?, (SELECT COALESCE(MAX(display_order), -1) + 1 FROM parking_lots), 210, 50)
+      `).run(name);
+      realtime.notify();
+      response.status(201).json(db.prepare(
+        "SELECT id, name, display_order, area_height, area_width FROM parking_lots WHERE id = ?",
+      ).get(result.lastInsertRowid));
+    } catch (error) {
+      if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
+        return response.status(409).json({ detail: "A parking location with that name already exists." });
+      }
+      next(error);
+    }
+  });
+
   app.patch("/api/parking-lots/:id", requireUser, requireSameOrigin, (request, response, next) => {
     try {
       const lotId = parseVehicleId(request.params.id);
       const lot = lotId === null ? null : db.prepare("SELECT * FROM parking_lots WHERE id = ?").get(lotId);
       if (!lot) return response.status(404).json({ detail: "Parking lot not found." });
-      const entries = Object.entries(request.body || {});
-      if (!entries.length || entries.some(([key]) => !["area_height", "area_width"].includes(key))) {
-        return response.status(422).json({ detail: "Only parking lot size can be changed." });
+      const body = request.body || {};
+      const entries = Object.entries(body);
+      if (!entries.length || entries.some(([key]) => !["name", "area_height", "area_width"].includes(key))) {
+        return response.status(422).json({ detail: "Only parking location name and size can be changed." });
       }
-      const { area_height: height, area_width: width } = request.body;
+      const { name: rawName, area_height: height, area_width: width } = body;
+      const name = typeof rawName === "string" ? rawName.trim() : rawName;
+      if (rawName !== undefined && (typeof name !== "string" || !name || name.length > 40)) {
+        return response.status(422).json({ detail: "Parking location name must be between 1 and 40 characters." });
+      }
+      if (name !== undefined &&
+          db.prepare("SELECT 1 FROM parking_lots WHERE name = ? COLLATE NOCASE AND id != ?").get(name, lotId)) {
+        return response.status(409).json({ detail: "A parking location with that name already exists." });
+      }
       if (height !== undefined && (!Number.isInteger(height) || height < 160 || height > 600)) {
         return response.status(422).json({ detail: "Parking area height must be between 160 and 600 pixels." });
       }
-      if (width !== undefined && ![1, 2].includes(width)) {
-        return response.status(422).json({ detail: "Parking area width must be 1 or 2 columns." });
+      if (width !== undefined && (!Number.isInteger(width) || width < 30 || width > 100)) {
+        return response.status(422).json({ detail: "Parking area width must be between 30 and 100 percent." });
       }
-      const assignments = entries.map(([key]) => `${key} = ?`).join(", ");
+      const values = Object.fromEntries(entries);
+      if (name !== undefined) values.name = name;
+      const assignments = Object.keys(values).map((key) => `${key} = ?`).join(", ");
       db.prepare(`UPDATE parking_lots SET ${assignments} WHERE id = ?`)
-        .run(...entries.map(([, value]) => value), lotId);
+        .run(...Object.values(values), lotId);
       realtime.notify();
       response.json(db.prepare(
         "SELECT id, name, display_order, area_height, area_width FROM parking_lots WHERE id = ?",
       ).get(lotId));
     } catch (error) {
+      if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
+        return response.status(409).json({ detail: "A parking location with that name already exists." });
+      }
       next(error);
     }
   });
