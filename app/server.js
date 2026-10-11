@@ -9,7 +9,7 @@ const signature = require("cookie-signature");
 const { rateLimit } = require("express-rate-limit");
 const { WebSocket, WebSocketServer } = require("ws");
 
-const { openDatabase } = require("./db");
+const { BOARD_SECTIONS, VEHICLE_OPTIONS, VEHICLE_TYPES, openDatabase } = require("./db");
 const { SQLiteSessionStore } = require("./session-store");
 const { hashPassword, verifyPassword } = require("./security");
 
@@ -94,6 +94,11 @@ class RealtimeBoard {
 function vehicleFromRow(row) {
   const vehicle = { ...row };
   for (const status of STATUSES) vehicle[status] = Boolean(vehicle[status]);
+  try {
+    vehicle.options = JSON.parse(vehicle.options || "[]");
+  } catch {
+    vehicle.options = [];
+  }
   return vehicle;
 }
 
@@ -233,10 +238,17 @@ function createApplication(options = {}) {
     const parkingLots = db.prepare("SELECT id, name FROM parking_lots ORDER BY id").all();
     const vehicles = db.prepare(`
       SELECT id, external_id, plate, vehicle_type, parking_lot_id,
-             position_x, position_y, unwashed, no_fuel, needs_repair
+             position_x, position_y, unwashed, no_fuel, needs_repair,
+             board_section, options
       FROM vehicles ORDER BY plate, id
     `).all().map(vehicleFromRow);
-    response.json({ parking_lots: parkingLots, vehicles });
+    response.json({
+      parking_lots: parkingLots,
+      vehicles,
+      board_sections: BOARD_SECTIONS,
+      vehicle_types: VEHICLE_TYPES,
+      vehicle_options: VEHICLE_OPTIONS,
+    });
   });
 
   app.post("/api/vehicles", requireUser, requireSameOrigin, (request, response, next) => {
@@ -244,7 +256,7 @@ function createApplication(options = {}) {
       const { plate, vehicle_type: vehicleType, parking_lot_id: lotId } = request.body || {};
       if (
         typeof plate !== "string" || !plate.trim() || plate.trim().length > 40 ||
-        typeof vehicleType !== "string" || !vehicleType.trim() || vehicleType.trim().length > 40
+        !VEHICLE_TYPES.includes(vehicleType)
       ) {
         return response.status(422).json({ detail: "Valid plate and vehicle type are required." });
       }
@@ -266,15 +278,24 @@ function createApplication(options = {}) {
       } else {
         position = getNextPosition(db, lotId);
       }
+      const section = request.body.board_section ?? "予備";
+      const options = request.body.options ?? [];
+      if (!BOARD_SECTIONS.includes(section)) {
+        return response.status(422).json({ detail: "Unknown board section." });
+      }
+      if (!Array.isArray(options) || options.some((option) => !VEHICLE_OPTIONS.includes(option)) ||
+          new Set(options).size !== options.length) {
+        return response.status(422).json({ detail: "Invalid vehicle options." });
+      }
       const result = db.prepare(`
         INSERT INTO vehicles
           (plate, vehicle_type, parking_lot_id, position_x, position_y,
-           unwashed, no_fuel, needs_repair)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           unwashed, no_fuel, needs_repair, board_section, options)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         plate.trim(), vehicleType.trim(), lotId ?? null, position.positionX, position.positionY,
         Number(request.body.unwashed === true), Number(request.body.no_fuel === true),
-        Number(request.body.needs_repair === true),
+        Number(request.body.needs_repair === true), section, JSON.stringify(options),
       );
       realtime.notify();
       response.status(201).json(vehicleFromRow(db.prepare("SELECT * FROM vehicles WHERE id = ?").get(result.lastInsertRowid)));
@@ -291,7 +312,8 @@ function createApplication(options = {}) {
       const vehicleId = parseVehicleId(request.params.id);
       if (vehicleId === null) return response.status(404).json({ detail: "Vehicle not found." });
       const allowed = new Set([
-        "plate", "vehicle_type", "parking_lot_id", "position_x", "position_y", ...STATUSES,
+        "plate", "vehicle_type", "parking_lot_id", "position_x", "position_y",
+        "board_section", "options", ...STATUSES,
       ]);
       const entries = Object.entries(request.body || {});
       if (!entries.length) return response.status(422).json({ detail: "No vehicle fields supplied." });
@@ -305,6 +327,19 @@ function createApplication(options = {}) {
           (typeof data[field] !== "string" || !data[field].trim() || data[field].trim().length > 40))
       ) {
         return response.status(422).json({ detail: "Plate and vehicle type cannot be empty." });
+      }
+      if (Object.hasOwn(data, "vehicle_type") && !VEHICLE_TYPES.includes(data.vehicle_type)) {
+        return response.status(422).json({ detail: "Unknown vehicle type." });
+      }
+      if (Object.hasOwn(data, "board_section") && !BOARD_SECTIONS.includes(data.board_section)) {
+        return response.status(422).json({ detail: "Unknown board section." });
+      }
+      if (Object.hasOwn(data, "options")) {
+        if (!Array.isArray(data.options) || data.options.some((option) => !VEHICLE_OPTIONS.includes(option)) ||
+            new Set(data.options).size !== data.options.length) {
+          return response.status(422).json({ detail: "Invalid vehicle options." });
+        }
+        data.options = JSON.stringify(data.options);
       }
       if (["position_x", "position_y"].some((field) =>
         Object.hasOwn(data, field) &&
@@ -368,8 +403,7 @@ function createApplication(options = {}) {
           !vehicle || typeof vehicle.external_id !== "string" || !vehicle.external_id.trim() ||
           vehicle.external_id.length > 120 || typeof vehicle.plate !== "string" ||
           !vehicle.plate.trim() || vehicle.plate.trim().length > 40 ||
-          typeof vehicle.vehicle_type !== "string" || !vehicle.vehicle_type.trim() ||
-          vehicle.vehicle_type.trim().length > 40
+          !VEHICLE_TYPES.includes(vehicle.vehicle_type)
         ) return response.status(422).json({ detail: "Each vehicle requires external_id, plate, and vehicle_type." });
         if (vehicle.parking_lot_id != null &&
             (!Number.isInteger(vehicle.parking_lot_id) || !validateLot(vehicle.parking_lot_id))) {

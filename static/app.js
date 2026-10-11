@@ -10,12 +10,17 @@
   const statuses = ["unwashed", "no_fuel", "needs_repair"];
   const statusLabels = { unwashed: "洗車待ち", no_fuel: "給油待ち", needs_repair: "要修理" };
   const statusIcons = { unwashed: "🫧", no_fuel: "⛽", needs_repair: "🔧" };
+  const optionNames = ["ETC", "車載器", "禁煙", "喫煙", "ナビ", "スタッドレス"];
   let lots = [];
   let vehicles = [];
-  let activeFilter = "all";
+  let vehicleTypes = [];
+  let activeBoard = "予備";
+  let activeVehicleType = "all";
+  let activeStatus = "all";
   let socket;
   let dragged = null;
   let suppressClick = false;
+  let pendingBoardRefresh = false;
 
   async function api(path, options = {}) {
     const response = await fetch(path, {
@@ -50,39 +55,69 @@
   }
 
   async function loadBoard() {
+    if (dragged) {
+      pendingBoardRefresh = true;
+      return;
+    }
     const data = await api("/api/bootstrap");
     lots = data.parking_lots;
     vehicles = data.vehicles;
+    vehicleTypes = data.vehicle_types;
+    populateVehicleTypeChoices();
     render();
   }
 
   function typeClass(type) {
-    return ["hybrid", "ev", "van"].includes(type) ? `type-${type}` : "type-standard";
+    const index = Math.max(0, vehicleTypes.indexOf(type));
+    return `type-color-${index}`;
+  }
+
+  function vehiclesOnBoard() {
+    return vehicles.filter((vehicle) => vehicle.board_section === activeBoard);
   }
 
   function render() {
+    const boardVehicles = vehiclesOnBoard();
     parkingGrid.replaceChildren();
+    const unparked = boardVehicles.filter((vehicle) => vehicle.parking_lot_id === null);
+    parkingGrid.append(makeParkingCard({ id: "none", name: "未配置・予備置き場" }, unparked));
     for (const lot of lots) {
-      const card = document.createElement("article");
-      card.className = "lot-card";
-      const inLot = vehicles.filter((vehicle) => vehicle.parking_lot_id === lot.id);
-      card.innerHTML = '<div class="lot-heading"><h3></h3><span class="lot-count"></span></div><div class="lot-area"></div>';
-      card.querySelector("h3").textContent = lot.name;
-      card.querySelector(".lot-count").textContent = `${inLot.length} 台`;
-      const area = card.querySelector(".lot-area");
-      area.dataset.lotId = lot.id;
-      area.style.height = `${Math.max(210, Math.ceil(inLot.length / 4) * 52 + 24)}px`;
-      if (inLot.length === 0) area.classList.add("empty");
-      for (const vehicle of inLot) area.append(makeToken(vehicle));
-      parkingGrid.append(card);
+      const inLot = boardVehicles.filter((vehicle) => vehicle.parking_lot_id === lot.id);
+      parkingGrid.append(makeParkingCard(lot, inLot));
     }
-    document.querySelector("#vehicle-count").textContent = vehicles.length;
+    document.querySelector("#vehicle-count").textContent = boardVehicles.length;
     document.querySelector("#lot-count").textContent = lots.length;
-    document.querySelector("#attention-count").textContent = vehicles.filter((vehicle) =>
+    document.querySelector("#attention-count").textContent = boardVehicles.filter((vehicle) =>
       statuses.some((status) => vehicle[status]),
     ).length;
-    populateLotSelect();
-    renderStatusList();
+    document.querySelectorAll(".board-tab").forEach((tab) => {
+      const selected = tab.dataset.boardSection === activeBoard;
+      tab.classList.toggle("active", selected);
+      tab.setAttribute("aria-selected", String(selected));
+    });
+    renderVehicleCatalog(boardVehicles);
+    renderStatusList(boardVehicles);
+  }
+
+  function makeParkingCard(lot, inLot) {
+    const card = document.createElement("article");
+    card.className = `lot-card${lot.id === "none" ? " reserve-card" : ""}`;
+    const heading = document.createElement("div");
+    heading.className = "lot-heading";
+    const title = document.createElement("h3");
+    title.textContent = lot.name;
+    const count = document.createElement("span");
+    count.className = "lot-count";
+    count.textContent = `${inLot.length} 台`;
+    heading.append(title, count);
+    const area = document.createElement("div");
+    area.className = "lot-area";
+    area.dataset.lotId = lot.id;
+    area.style.height = `${Math.max(210, Math.ceil(inLot.length / 4) * 52 + 24)}px`;
+    if (!inLot.length) area.classList.add("empty");
+    for (const vehicle of inLot) area.append(makeToken(vehicle));
+    card.append(heading, area);
+    return card;
   }
 
   function makeToken(vehicle) {
@@ -96,12 +131,15 @@
     const plate = document.createElement("span");
     plate.textContent = vehicle.plate;
     token.append(plate);
-    const flags = statuses.filter((status) => vehicle[status]);
-    if (flags.length) {
-      const badges = document.createElement("span");
-      badges.className = "token-badges";
-      badges.textContent = flags.map((status) => statusIcons[status]).join("");
-      token.append(badges);
+    const badges = [
+      ...statuses.filter((status) => vehicle[status]).map((status) => statusIcons[status]),
+      ...(vehicle.options || []),
+    ];
+    if (badges.length) {
+      const badgeNode = document.createElement("span");
+      badgeNode.className = "token-badges";
+      badgeNode.textContent = badges.join(" · ");
+      token.append(badgeNode);
     }
     token.addEventListener("pointerdown", startDrag);
     token.addEventListener("click", () => {
@@ -115,90 +153,165 @@
   }
 
   function startDrag(event) {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || dragged) return;
+    event.preventDefault();
     const token = event.currentTarget;
+    const ghost = token.cloneNode(true);
+    ghost.classList.add("dragging", "drag-ghost");
+    ghost.style.position = "fixed";
+    ghost.style.pointerEvents = "none";
+    ghost.style.width = `${token.getBoundingClientRect().width}px`;
+    ghost.style.left = `${event.clientX}px`;
+    ghost.style.top = `${event.clientY}px`;
+    document.body.append(ghost);
     dragged = {
       id: Number(token.dataset.id),
       token,
+      ghost,
+      pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
       moved: false,
     };
-    token.setPointerCapture(event.pointerId);
-    token.addEventListener("pointermove", moveDrag);
-    token.addEventListener("pointerup", endDrag, { once: true });
-    token.addEventListener("pointercancel", endDrag, { once: true });
   }
 
   function moveDrag(event) {
-    if (!dragged) return;
-    if (Math.abs(event.clientX - dragged.startX) + Math.abs(event.clientY - dragged.startY) > 5) dragged.moved = true;
+    if (!dragged || event.pointerId !== dragged.pointerId) return;
+    if (Math.abs(event.clientX - dragged.startX) + Math.abs(event.clientY - dragged.startY) > 5) {
+      dragged.moved = true;
+    }
     if (!dragged.moved) return;
-    dragged.token.classList.add("dragging");
-    if (dragged.token.parentElement !== document.body) document.body.append(dragged.token);
-    dragged.token.style.pointerEvents = "none";
-    dragged.token.style.left = `${event.clientX}px`;
-    dragged.token.style.top = `${event.clientY}px`;
-    dragged.token.style.position = "fixed";
+    dragged.ghost.style.left = `${event.clientX}px`;
+    dragged.ghost.style.top = `${event.clientY}px`;
+    document.querySelectorAll(".board-tab.drop-target").forEach((tab) => tab.classList.remove("drop-target"));
+    document.elementFromPoint(event.clientX, event.clientY)
+      ?.closest(".board-tab")?.classList.add("drop-target");
   }
 
-  async function endDrag(event) {
+  async function endDrag(event, cancelled = false) {
+    if (!dragged || event.pointerId !== dragged.pointerId) return;
     const current = dragged;
-    if (!current) return;
+    const dropTarget = !cancelled && current.moved
+      ? document.elementFromPoint(event.clientX, event.clientY)
+      : null;
+    const dropArea = dropTarget?.closest(".lot-area");
+    const dropTab = dropTarget?.closest(".board-tab");
     dragged = null;
-    current.token.removeEventListener("pointermove", moveDrag);
-    current.token.classList.remove("dragging");
-    if (!current.moved) return;
-    suppressClick = true;
-    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".lot-area");
-    const vehicle = vehicles.find((item) => item.id === current.id);
-    const lot = target && lots.find((item) => item.id === Number(target.dataset.lotId));
-    if (!lot) {
-      current.token.remove();
-      await loadBoard();
-      suppressClick = false;
+    current.ghost.remove();
+    document.querySelectorAll(".board-tab.drop-target").forEach((tab) => tab.classList.remove("drop-target"));
+    if (!current.moved) {
+      if (pendingBoardRefresh) {
+        pendingBoardRefresh = false;
+        await loadBoard();
+      }
       return;
     }
-    const area = target;
-    const rect = area.getBoundingClientRect();
-    const positionX = Math.max(0, Math.min(1, (event.clientX - rect.left - rect.width * 0.08) / (rect.width * 0.84)));
-    const positionY = Math.max(0, Math.min(1, (event.clientY - rect.top - rect.height * 0.1) / (rect.height * 0.8)));
+    suppressClick = true;
+    if (!dropArea && !dropTab) {
+      window.setTimeout(() => { suppressClick = false; }, 0);
+      if (pendingBoardRefresh) {
+        pendingBoardRefresh = false;
+        await loadBoard();
+      }
+      return;
+    }
+    const position = dropArea ? (() => {
+      const rect = dropArea.getBoundingClientRect();
+      return {
+        position_x: Math.max(0, Math.min(1, (event.clientX - rect.left - rect.width * 0.08) / (rect.width * 0.84))),
+        position_y: Math.max(0, Math.min(1, (event.clientY - rect.top - rect.height * 0.1) / (rect.height * 0.8))),
+        parking_lot_id: dropArea.dataset.lotId === "none" ? null : Number(dropArea.dataset.lotId),
+      };
+    })() : { board_section: dropTab.dataset.boardSection };
     try {
       await api(`/api/vehicles/${current.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ parking_lot_id: lot.id, position_x: positionX, position_y: positionY }),
+        body: JSON.stringify(position),
       });
-      current.token.remove();
-      await loadBoard();
+      if (dropTab) activeBoard = dropTab.dataset.boardSection;
     } catch (error) {
-      current.token.remove();
       showError(error);
-      await loadBoard();
     }
+    await loadBoard();
     window.setTimeout(() => { suppressClick = false; }, 0);
   }
 
-  function populateLotSelect() {
-    const select = vehicleForm.elements.parking_lot_id;
-    const value = select.value;
-    select.replaceChildren(...lots.map((lot) => {
+  document.addEventListener("pointermove", moveDrag);
+  document.addEventListener("pointerup", (event) => endDrag(event));
+  document.addEventListener("pointercancel", (event) => endDrag(event, true));
+
+  function populateVehicleTypeChoices() {
+    const select = vehicleForm.elements.vehicle_type;
+    const current = select.value;
+    select.replaceChildren(...vehicleTypes.map((type) => {
       const option = document.createElement("option");
-      option.value = lot.id;
-      option.textContent = lot.name;
+      option.value = type;
+      option.textContent = type;
       return option;
     }));
-    if (lots.some((lot) => String(lot.id) === value)) select.value = value;
+    if (vehicleTypes.includes(current)) select.value = current;
+    const filters = document.querySelector("#vehicle-type-filters");
+    const active = activeVehicleType;
+    filters.replaceChildren();
+    for (const [value, label] of [["all", "All"], ...vehicleTypes.map((type) => [type, type])]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `type-filter${value === "all" ? "" : ` ${typeClass(value)}`}${value === active ? " active" : ""}`;
+      button.dataset.vehicleType = value;
+      button.textContent = label;
+      button.addEventListener("click", () => {
+        activeVehicleType = value;
+        renderVehicleCatalog(vehiclesOnBoard());
+      });
+      filters.append(button);
+    }
   }
 
-  function renderStatusList() {
+  function renderVehicleCatalog(boardVehicles) {
+    const filtered = boardVehicles.filter((vehicle) =>
+      activeVehicleType === "all" || vehicle.vehicle_type === activeVehicleType,
+    );
+    const list = document.querySelector("#vehicle-catalog-list");
+    list.replaceChildren();
+    document.querySelector("#catalog-total").textContent = `${filtered.length} 台`;
+    document.querySelectorAll(".type-filter").forEach((button) => {
+      button.classList.toggle("active", button.dataset.vehicleType === activeVehicleType);
+    });
+    if (!filtered.length) {
+      const empty = document.createElement("p");
+      empty.className = "status-empty";
+      empty.textContent = "該当する車両はありません。";
+      list.append(empty);
+      return;
+    }
+    for (const vehicle of filtered) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "catalog-item";
+      const plate = document.createElement("strong");
+      plate.textContent = vehicle.plate;
+      const details = document.createElement("span");
+      const lot = lots.find((entry) => entry.id === vehicle.parking_lot_id);
+      details.textContent = `${vehicle.vehicle_type} · ${lot?.name || "未配置"}${vehicle.options?.length ? ` · ${vehicle.options.join("・")}` : ""}`;
+      item.append(plate, details);
+      item.addEventListener("click", () => {
+        const location = document.querySelector(`[data-lot-id="${vehicle.parking_lot_id ?? "none"}"]`);
+        location?.scrollIntoView({ behavior: "smooth", block: "center" });
+        document.querySelector(`[data-id="${vehicle.id}"]`)?.focus({ preventScroll: true });
+      });
+      list.append(item);
+    }
+  }
+
+  function renderStatusList(boardVehicles) {
     const list = document.querySelector("#status-list");
     list.replaceChildren();
-    const filtered = vehicles.filter((vehicle) => activeFilter === "all" || vehicle[activeFilter]);
+    const filtered = boardVehicles.filter((vehicle) => activeStatus === "all" || vehicle[activeStatus]);
     document.querySelector("#status-total").textContent = `${filtered.length} 台`;
     if (!filtered.length) {
       const empty = document.createElement("p");
       empty.className = "status-empty";
-      empty.textContent = activeFilter === "all" ? "登録車両はありません。「車両を追加」から登録してください。" : "該当する車両はありません。";
+      empty.textContent = activeStatus === "all" ? "登録車両はありません。「車両を追加」から登録してください。" : "該当する車両はありません。";
       list.append(empty);
       return;
     }
@@ -211,11 +324,10 @@
       const description = document.createElement("span");
       const active = statuses.filter((status) => vehicle[status]).map((status) => statusLabels[status]);
       const lot = lots.find((entry) => entry.id === vehicle.parking_lot_id);
-      description.textContent = `${lot ? lot.name : "未配置"} · ${active.join(" / ") || vehicle.vehicle_type}`;
+      description.textContent = `${lot?.name || "未配置"} · ${active.join(" / ") || vehicle.vehicle_type}`;
       item.append(plate, description);
       item.addEventListener("click", () => {
-        if (!lot) return;
-        document.querySelector(`[data-lot-id="${lot.id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+        document.querySelector(`[data-lot-id="${vehicle.parking_lot_id ?? "none"}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
         document.querySelector(`[data-id="${vehicle.id}"]`)?.focus({ preventScroll: true });
       });
       list.append(item);
@@ -225,13 +337,15 @@
   function openVehicle(vehicle = null) {
     vehicleForm.reset();
     formError.textContent = "";
-    populateLotSelect();
     document.querySelector("#dialog-title").textContent = vehicle ? "車両情報を編集" : "車両を追加";
     document.querySelector("#delete-vehicle").hidden = !vehicle;
     vehicleForm.elements.id.value = vehicle?.id || "";
     vehicleForm.elements.plate.value = vehicle?.plate || "";
-    vehicleForm.elements.vehicle_type.value = vehicle?.vehicle_type || "standard";
-    vehicleForm.elements.parking_lot_id.value = vehicle?.parking_lot_id ?? (lots[0]?.id || "");
+    vehicleForm.elements.vehicle_type.value = vehicle?.vehicle_type || vehicleTypes[0] || "";
+    vehicleForm.elements.board_section.value = vehicle?.board_section || "予備";
+    for (const input of vehicleForm.querySelectorAll('input[name="options"]')) {
+      input.checked = Boolean(vehicle?.options?.includes(input.value));
+    }
     for (const status of statuses) vehicleForm.elements[status].checked = Boolean(vehicle?.[status]);
     dialog.showModal();
   }
@@ -279,6 +393,13 @@
       showError(error);
     }
   });
+  document.querySelectorAll(".board-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      activeBoard = tab.dataset.boardSection;
+      activeVehicleType = "all";
+      render();
+    });
+  });
   document.querySelector("#add-vehicle-button").addEventListener("click", () => openVehicle());
   document.querySelector("#close-dialog").addEventListener("click", () => dialog.close());
   document.querySelector("#cancel-dialog").addEventListener("click", () => dialog.close());
@@ -301,7 +422,8 @@
     const payload = {
       plate: form.get("plate"),
       vehicle_type: form.get("vehicle_type"),
-      parking_lot_id: Number(form.get("parking_lot_id")),
+      board_section: form.get("board_section"),
+      options: form.getAll("options"),
     };
     for (const status of statuses) payload[status] = form.has(status);
     try {
@@ -309,6 +431,9 @@
         method: id ? "PATCH" : "POST",
         body: JSON.stringify(payload),
       });
+      if (!id) activeBoard = "予備";
+      else activeBoard = payload.board_section;
+      activeVehicleType = "all";
       dialog.close();
       await loadBoard();
     } catch (error) {
@@ -317,9 +442,9 @@
   });
   document.querySelectorAll(".filter-button").forEach((button) => {
     button.addEventListener("click", () => {
-      activeFilter = button.dataset.filter;
+      activeStatus = button.dataset.filter;
       document.querySelectorAll(".filter-button").forEach((item) => item.classList.toggle("active", item === button));
-      renderStatusList();
+      renderStatusList(vehiclesOnBoard());
     });
   });
   api("/api/me").then((result) => {

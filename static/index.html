@@ -37,18 +37,26 @@
         <div><p class="eyebrow">LIVE FLEET OVERVIEW</p><h1>車両配置</h1><p class="muted">車両をドラッグして駐車場間を移動できます。変更は全員にリアルタイムで共有されます。</p></div>
         <button id="add-vehicle-button" class="primary-button">＋ 車両を追加</button>
       </section>
+      <nav id="board-tabs" class="board-tabs" aria-label="車両ページ">
+        <button class="board-tab active" data-board-section="本店貸出中">本店貸出中</button>
+        <button class="board-tab" data-board-section="駅前店貸出中">駅前店貸出中</button>
+        <button class="board-tab" data-board-section="予備">予備</button>
+      </nav>
       <section class="summary-row" aria-label="車両の概要">
         <div class="summary-card"><span>登録車両</span><b id="vehicle-count">0</b></div>
         <div class="summary-card"><span>駐車場</span><b id="lot-count">9</b></div>
         <div class="summary-card"><span>要対応</span><b id="attention-count">0</b></div>
-        <div class="legend-card">
-          <span class="legend-item"><i class="type-dot type-standard"></i>軽・コンパクト</span>
-          <span class="legend-item"><i class="type-dot type-hybrid"></i>ハイブリッド</span>
-          <span class="legend-item"><i class="type-dot type-ev"></i>EV</span>
-          <span class="legend-item"><i class="type-dot type-van"></i>ミニバン・その他</span>
-        </div>
       </section>
-      <section id="parking-grid" class="parking-grid" aria-label="駐車場"></section>
+      <div class="board-workspace">
+        <section id="parking-grid" class="parking-grid" aria-label="駐車場"></section>
+        <aside class="vehicle-catalog" aria-labelledby="catalog-title">
+          <div class="catalog-heading"><h2 id="catalog-title">車両一覧</h2><span id="catalog-total" class="muted"></span></div>
+          <div id="vehicle-type-filters" class="catalog-filters" role="group" aria-label="車種で絞り込み">
+            <button class="type-filter active" data-vehicle-type="all">All</button>
+          </div>
+          <div id="vehicle-catalog-list" class="vehicle-catalog-list"></div>
+        </aside>
+      </div>
       <section class="status-section">
         <div class="section-heading"><div><p class="eyebrow">FOLLOW-UP</p><h2>ステータス別の車両</h2></div><span id="status-total" class="muted"></span></div>
         <div class="filter-row" role="group" aria-label="車両ステータスで絞り込み">
@@ -67,9 +75,21 @@
       <input type="hidden" name="id">
       <label>ナンバー<input name="plate" required maxlength="40" placeholder="例: 品川 500 あ 1234"></label>
       <div class="form-row">
-        <label>車種・タイプ<select name="vehicle_type" required><option value="standard">軽・コンパクト</option><option value="hybrid">ハイブリッド</option><option value="ev">EV</option><option value="van">ミニバン・その他</option></select></label>
-        <label>駐車場<select name="parking_lot_id" required></select></label>
+        <label>車種・タイプ<select name="vehicle_type" required></select></label>
+        <label>ページ<select name="board_section" required>
+          <option value="本店貸出中">本店貸出中</option>
+          <option value="駅前店貸出中">駅前店貸出中</option>
+          <option value="予備">予備</option>
+        </select></label>
       </div>
+      <fieldset class="option-fields"><legend>オプション</legend>
+        <label class="check-label"><input type="checkbox" name="options" value="ETC">ETC</label>
+        <label class="check-label"><input type="checkbox" name="options" value="車載器">車載器</label>
+        <label class="check-label"><input type="checkbox" name="options" value="禁煙">禁煙</label>
+        <label class="check-label"><input type="checkbox" name="options" value="喫煙">喫煙</label>
+        <label class="check-label"><input type="checkbox" name="options" value="ナビ">ナビ</label>
+        <label class="check-label"><input type="checkbox" name="options" value="スタッドレス">スタッドレス</label>
+      </fieldset>
       <fieldset class="status-fields"><legend>対応ステータス</legend>
         <label class="check-label"><input type="checkbox" name="unwashed">洗車待ち</label>
         <label class="check-label"><input type="checkbox" name="no_fuel">給油待ち</label>

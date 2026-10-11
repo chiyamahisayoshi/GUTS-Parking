@@ -3,6 +3,9 @@ const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 
 const LOT_NAMES = Array.from({ length: 9 }, (_, index) => `駐車場 ${index + 1}`);
+const VEHICLE_TYPES = ["A-1", "A-2", "A-2P", "B", "B軽トラ", "C-1", "C-2", "D", "H-1", "H-2", "その他"];
+const BOARD_SECTIONS = ["本店貸出中", "駅前店貸出中", "予備"];
+const VEHICLE_OPTIONS = ["ETC", "車載器", "禁煙", "喫煙", "ナビ", "スタッドレス"];
 
 function openDatabase(databasePath) {
   if (databasePath !== ":memory:") fs.mkdirSync(path.dirname(path.resolve(databasePath)), { recursive: true });
@@ -31,7 +34,9 @@ function openDatabase(databasePath) {
       position_y REAL NOT NULL DEFAULT 0.5 CHECK(position_y >= 0 AND position_y <= 1),
       unwashed INTEGER NOT NULL DEFAULT 0 CHECK(unwashed IN (0, 1)),
       no_fuel INTEGER NOT NULL DEFAULT 0 CHECK(no_fuel IN (0, 1)),
-      needs_repair INTEGER NOT NULL DEFAULT 0 CHECK(needs_repair IN (0, 1))
+      needs_repair INTEGER NOT NULL DEFAULT 0 CHECK(needs_repair IN (0, 1)),
+      board_section TEXT NOT NULL DEFAULT '予備',
+      options TEXT NOT NULL DEFAULT '[]'
     );
     CREATE TABLE IF NOT EXISTS sessions (
       sid TEXT PRIMARY KEY,
@@ -41,6 +46,24 @@ function openDatabase(databasePath) {
     CREATE INDEX IF NOT EXISTS vehicles_lot_idx ON vehicles(parking_lot_id);
     CREATE INDEX IF NOT EXISTS vehicles_plate_idx ON vehicles(plate);
     CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions(expires);
+  `);
+  const columns = new Set(db.prepare("PRAGMA table_info(vehicles)").all().map((column) => column.name));
+  if (!columns.has("board_section")) {
+    db.exec("ALTER TABLE vehicles ADD COLUMN board_section TEXT NOT NULL DEFAULT '予備'");
+  }
+  if (!columns.has("options")) {
+    db.exec("ALTER TABLE vehicles ADD COLUMN options TEXT NOT NULL DEFAULT '[]'");
+  }
+  db.exec(`
+    UPDATE vehicles
+    SET vehicle_type = CASE vehicle_type
+      WHEN 'standard' THEN 'A-1'
+      WHEN 'hybrid' THEN 'A-2'
+      WHEN 'ev' THEN 'A-2P'
+      WHEN 'van' THEN 'B'
+      ELSE 'その他'
+    END
+    WHERE vehicle_type NOT IN ('A-1', 'A-2', 'A-2P', 'B', 'B軽トラ', 'C-1', 'C-2', 'D', 'H-1', 'H-2', 'その他')
   `);
   const addLot = db.prepare("INSERT OR IGNORE INTO parking_lots (name) VALUES (?)");
   db.exec("BEGIN IMMEDIATE");
@@ -55,4 +78,4 @@ function openDatabase(databasePath) {
   return db;
 }
 
-module.exports = { LOT_NAMES, openDatabase };
+module.exports = { BOARD_SECTIONS, LOT_NAMES, VEHICLE_OPTIONS, VEHICLE_TYPES, openDatabase };
