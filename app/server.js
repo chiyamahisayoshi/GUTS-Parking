@@ -235,7 +235,9 @@ function createApplication(options = {}) {
   });
 
   app.get("/api/bootstrap", requireUser, (_request, response) => {
-    const parkingLots = db.prepare("SELECT id, name FROM parking_lots ORDER BY id").all();
+    const parkingLots = db.prepare(
+      "SELECT id, name, display_order, area_height, area_width FROM parking_lots ORDER BY display_order, id",
+    ).all();
     const vehicles = db.prepare(`
       SELECT id, external_id, plate, vehicle_type, parking_lot_id,
              position_x, position_y, unwashed, no_fuel, needs_repair,
@@ -249,6 +251,55 @@ function createApplication(options = {}) {
       vehicle_types: VEHICLE_TYPES,
       vehicle_options: VEHICLE_OPTIONS,
     });
+  });
+
+  app.patch("/api/parking-lots/:id", requireUser, requireSameOrigin, (request, response, next) => {
+    try {
+      const lotId = parseVehicleId(request.params.id);
+      const lot = lotId === null ? null : db.prepare("SELECT * FROM parking_lots WHERE id = ?").get(lotId);
+      if (!lot) return response.status(404).json({ detail: "Parking lot not found." });
+      const entries = Object.entries(request.body || {});
+      if (!entries.length || entries.some(([key]) => !["area_height", "area_width"].includes(key))) {
+        return response.status(422).json({ detail: "Only parking lot size can be changed." });
+      }
+      const { area_height: height, area_width: width } = request.body;
+      if (height !== undefined && (!Number.isInteger(height) || height < 160 || height > 600)) {
+        return response.status(422).json({ detail: "Parking area height must be between 160 and 600 pixels." });
+      }
+      if (width !== undefined && ![1, 2].includes(width)) {
+        return response.status(422).json({ detail: "Parking area width must be 1 or 2 columns." });
+      }
+      const assignments = entries.map(([key]) => `${key} = ?`).join(", ");
+      db.prepare(`UPDATE parking_lots SET ${assignments} WHERE id = ?`)
+        .run(...entries.map(([, value]) => value), lotId);
+      realtime.notify();
+      response.json(db.prepare(
+        "SELECT id, name, display_order, area_height, area_width FROM parking_lots WHERE id = ?",
+      ).get(lotId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.put("/api/parking-lots/order", requireUser, requireSameOrigin, (request, response, next) => {
+    const { ids } = request.body || {};
+    const actualIds = db.prepare("SELECT id FROM parking_lots").all().map((lot) => lot.id).sort((a, b) => a - b);
+    if (!Array.isArray(ids) || ids.length !== actualIds.length ||
+        ids.some((id) => !Number.isInteger(id)) ||
+        [...ids].sort((a, b) => a - b).some((id, index) => id !== actualIds[index])) {
+      return response.status(422).json({ detail: "Order must contain every parking lot exactly once." });
+    }
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      const updateOrder = db.prepare("UPDATE parking_lots SET display_order = ? WHERE id = ?");
+      ids.forEach((id, index) => updateOrder.run(index, id));
+      db.exec("COMMIT");
+      realtime.notify();
+      response.json({ ids });
+    } catch (error) {
+      if (db.isTransaction) db.exec("ROLLBACK");
+      next(error);
+    }
   });
 
   app.post("/api/vehicles", requireUser, requireSameOrigin, (request, response, next) => {

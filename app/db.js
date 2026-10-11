@@ -22,7 +22,10 @@ function openDatabase(databasePath) {
     );
     CREATE TABLE IF NOT EXISTS parking_lots (
       id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE
+      name TEXT NOT NULL UNIQUE,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      area_height INTEGER NOT NULL DEFAULT 210,
+      area_width INTEGER NOT NULL DEFAULT 1
     );
     CREATE TABLE IF NOT EXISTS vehicles (
       id INTEGER PRIMARY KEY,
@@ -48,6 +51,17 @@ function openDatabase(databasePath) {
     CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions(expires);
   `);
   const columns = new Set(db.prepare("PRAGMA table_info(vehicles)").all().map((column) => column.name));
+  const lotColumns = new Set(db.prepare("PRAGMA table_info(parking_lots)").all().map((column) => column.name));
+  if (!lotColumns.has("display_order")) {
+    db.exec("ALTER TABLE parking_lots ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0");
+    db.exec("UPDATE parking_lots SET display_order = id - 1");
+  }
+  if (!lotColumns.has("area_height")) {
+    db.exec("ALTER TABLE parking_lots ADD COLUMN area_height INTEGER NOT NULL DEFAULT 210");
+  }
+  if (!lotColumns.has("area_width")) {
+    db.exec("ALTER TABLE parking_lots ADD COLUMN area_width INTEGER NOT NULL DEFAULT 1");
+  }
   if (!columns.has("board_section")) {
     db.exec("ALTER TABLE vehicles ADD COLUMN board_section TEXT NOT NULL DEFAULT '予備'");
   }

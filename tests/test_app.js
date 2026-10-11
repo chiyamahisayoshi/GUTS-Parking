@@ -262,11 +262,41 @@ test("creates new vehicles in the reserve page without assigning a parking lot",
   );
 });
 
+test("persists parking lot size and order and rejects invalid layouts", async () => {
+  const initialLots = (await agent.get("/api/bootstrap")).body.parking_lots;
+  assert.equal(initialLots.length, 9);
+  assert.deepEqual(
+    [initialLots[0].display_order, initialLots[0].area_height, initialLots[0].area_width],
+    [0, 210, 1],
+  );
+  const resized = await agent.patch("/api/parking-lots/4").send({
+    area_height: 370,
+    area_width: 2,
+  });
+  assert.equal(resized.status, 200);
+  assert.deepEqual([resized.body.area_height, resized.body.area_width], [370, 2]);
+  assert.equal((await agent.patch("/api/parking-lots/4").send({ area_height: 900 })).status, 422);
+  assert.equal((await agent.patch("/api/parking-lots/4").send({ area_width: 3 })).status, 422);
+  assert.equal((await agent.put("/api/parking-lots/order").send({ ids: [1, 2] })).status, 422);
+  const reordered = await agent.put("/api/parking-lots/order").send({
+    ids: [4, 1, 2, 3, 5, 6, 7, 8, 9],
+  });
+  assert.equal(reordered.status, 200);
+  assert.deepEqual(
+    (await agent.get("/api/bootstrap")).body.parking_lots.map((lot) => lot.id),
+    [4, 1, 2, 3, 5, 6, 7, 8, 9],
+  );
+});
+
 test("migrates existing vehicle records into the new model and reserve page", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rentalcar-migration-"));
   const databasePath = path.join(directory, "legacy.db");
   const legacy = new DatabaseSync(databasePath);
   legacy.exec(`
+    CREATE TABLE parking_lots (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE
+    );
     CREATE TABLE vehicles (
       id INTEGER PRIMARY KEY,
       external_id TEXT UNIQUE,
@@ -280,6 +310,8 @@ test("migrates existing vehicle records into the new model and reserve page", ()
       needs_repair INTEGER NOT NULL DEFAULT 0
     )
   `);
+  const legacyLot = legacy.prepare("INSERT INTO parking_lots (name) VALUES (?)");
+  for (let index = 1; index <= 9; index += 1) legacyLot.run(`駐車場 ${index}`);
   legacy.prepare("INSERT INTO vehicles (plate, vehicle_type) VALUES (?, ?)").run("旧データ", "hybrid");
   legacy.close();
   try {
@@ -288,6 +320,8 @@ test("migrates existing vehicle records into the new model and reserve page", ()
     assert.equal(vehicle.vehicle_type, "A-2");
     assert.equal(vehicle.board_section, "予備");
     assert.deepEqual(JSON.parse(vehicle.options), []);
+    const lot = migrated.prepare("SELECT * FROM parking_lots WHERE id = 4").get();
+    assert.deepEqual([lot.display_order, lot.area_height, lot.area_width], [3, 210, 1]);
     migrated.close();
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });

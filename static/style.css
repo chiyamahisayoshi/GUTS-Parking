@@ -37,22 +37,33 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .eyebrow { font-size: 10px; font-weight: 750; color: #16828b; letter-spacing: 1.5px; margin: 0; }
 .primary-button { border: 0; border-radius: 9px; background: var(--teal); color: #fff; font-weight: 650; padding: 11px 16px; box-shadow: 0 3px 8px #087e8b24; }
 .primary-button:hover { background: var(--teal-dark); }
-.board-tabs { display: flex; gap: 8px; margin: 25px 0 18px; border-bottom: 1px solid var(--border); }
-.board-tab { border: 0; border-bottom: 3px solid transparent; padding: 12px 18px; background: transparent; color: #627087; font-weight: 650; }
-.board-tab.active { color: var(--teal); border-color: var(--teal); }
-.board-tab.drop-target { background: #e3f7f3; color: #087e8b; border-radius: 8px 8px 0 0; }
 .summary-row { display: grid; grid-template-columns: repeat(3, minmax(100px, 150px)); gap: 12px; margin: 18px 0; }
 .summary-card { background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 13px 15px; min-height: 67px; }
 .summary-card span { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
 .summary-card b { font-size: 20px; }
 .board-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 330px; align-items: start; gap: 16px; }
-.parking-grid { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.board-sections { min-width: 0; display: grid; gap: 18px; }
+.board-section { min-width: 0; padding: 15px; background: #e9eef3; border: 1px solid #dbe3ea; border-radius: 15px; }
+.board-section-heading { display: flex; align-items: center; justify-content: space-between; margin: 1px 2px 12px; color: var(--ink); }
+.board-section-heading h2 { margin: 0; font-size: 17px; }
+.board-section-heading span { color: var(--muted); font-size: 12px; }
+.parking-grid { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row dense; gap: 14px; }
 .lot-card { min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 13px; overflow: hidden; box-shadow: 0 2px 7px #172b4d08; }
 .reserve-card { grid-column: 1 / -1; }
-.lot-heading { height: 48px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #edf0f4; }
+.lot-card.lot-wide { grid-column: span 2; }
+.lot-heading { min-height: 48px; padding: 6px 10px 6px 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid #edf0f4; cursor: grab; }
+.lot-heading:active { cursor: grabbing; }
+.lot-card.reordering { opacity: .5; }
+.lot-heading-title { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .lot-heading h3 { font-size: 13px; margin: 0; }
 .lot-count { font-size: 10px; background: #f0f4f7; color: #748298; border-radius: 20px; padding: 4px 8px; }
-.lot-area { min-height: 210px; position: relative; overflow: hidden; background-color: #f8fafb; background-image: linear-gradient(90deg, transparent 49.5%, #e9eff2 50%, transparent 50.5%), linear-gradient(0deg, transparent 49.5%, #e9eff2 50%, transparent 50.5%); background-size: 44px 44px; touch-action: none; }
+.lot-controls { display: flex; align-items: center; gap: 4px; }
+.lot-control { border: 1px solid var(--border); background: #fff; color: #53657b; border-radius: 6px; min-width: 30px; height: 28px; font-size: 10px; }
+.lot-control:hover { border-color: #8ecfd1; color: var(--teal); }
+.size-control { display: none; }
+.lot-card.size-editing .size-control { display: inline-block; }
+.lot-area { min-height: 160px; position: relative; overflow: hidden; background-color: #f8fafb; background-image: linear-gradient(90deg, transparent 49.5%, #e9eff2 50%, transparent 50.5%), linear-gradient(0deg, transparent 49.5%, #e9eff2 50%, transparent 50.5%); background-size: 44px 44px; touch-action: none; }
+.lot-area.drop-target { background-color: #e9f8f2; outline: 2px solid #69c89e; outline-offset: -3px; }
 .lot-area:before { content: ""; position: absolute; inset: 9px; border: 1px dashed #d8e1e6; border-radius: 8px; pointer-events: none; }
 .lot-area.empty:after { content: "車両をここへ移動"; position: absolute; inset: 0; display: grid; place-items: center; color: #aab5c2; font-size: 11px; pointer-events: none; }
 .vehicle-token { position: absolute; z-index: 1; min-width: 64px; max-width: 130px; min-height: 38px; padding: 6px 9px; border-radius: 18px; background: #e1f5ec; border: 1px solid #b7e5d0; color: #236b4e; font-weight: 750; font-size: 10px; white-space: normal; overflow-wrap: anywhere; text-align: center; box-shadow: 0 2px 5px #1c39421a; transform: translate(-50%, -50%); touch-action: none; user-select: none; cursor: grab; }
@@ -142,13 +153,14 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
   .page-heading h1 { font-size: 21px; }
   .page-heading .muted { font-size: 11px; line-height: 1.6; max-width: 255px; }
   .page-heading .primary-button { white-space: nowrap; padding: 10px; font-size: 11px; }
-  .board-tabs { overflow-x: auto; }
-  .board-tab { white-space: nowrap; padding: 11px 12px; }
   .summary-row { gap: 7px; margin: 15px 0; }
   .summary-card { padding: 10px; min-height: 58px; }
   .summary-card span { font-size: 10px; }
   .summary-card b { font-size: 18px; }
+  .board-section { padding: 10px; }
+  .board-section-heading h2 { font-size: 15px; }
   .parking-grid { grid-template-columns: 1fr; gap: 10px; }
+  .lot-card.lot-wide { grid-column: auto; }
   .lot-area { min-height: 210px; }
   .vehicle-catalog-list { grid-template-columns: 1fr; }
   .status-section { margin-top: 29px; }

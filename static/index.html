@@ -34,21 +34,16 @@
     </header>
     <main class="page-content">
       <section class="page-heading">
-        <div><p class="eyebrow">LIVE FLEET OVERVIEW</p><h1>車両配置</h1><p class="muted">車両をドラッグして駐車場間を移動できます。変更は全員にリアルタイムで共有されます。</p></div>
+        <div><p class="eyebrow">LIVE FLEET OVERVIEW</p><h1>車両配置</h1><p class="muted">3つのページごとに9か所の駐車場を表示します。車両の移動や駐車場のサイズ・順番は全員に共有されます。</p></div>
         <button id="add-vehicle-button" class="primary-button">＋ 車両を追加</button>
       </section>
-      <nav id="board-tabs" class="board-tabs" aria-label="車両ページ">
-        <button class="board-tab active" data-board-section="本店貸出中">本店貸出中</button>
-        <button class="board-tab" data-board-section="駅前店貸出中">駅前店貸出中</button>
-        <button class="board-tab" data-board-section="予備">予備</button>
-      </nav>
       <section class="summary-row" aria-label="車両の概要">
         <div class="summary-card"><span>登録車両</span><b id="vehicle-count">0</b></div>
         <div class="summary-card"><span>駐車場</span><b id="lot-count">9</b></div>
         <div class="summary-card"><span>要対応</span><b id="attention-count">0</b></div>
       </section>
       <div class="board-workspace">
-        <section id="parking-grid" class="parking-grid" aria-label="駐車場"></section>
+        <section id="board-sections" class="board-sections" aria-label="車両ページ"></section>
         <aside class="vehicle-catalog" aria-labelledby="catalog-title">
           <div class="catalog-heading"><h2 id="catalog-title">車両一覧</h2><span id="catalog-total" class="muted"></span></div>
           <div id="vehicle-type-filters" class="catalog-filters" role="group" aria-label="車種で絞り込み">

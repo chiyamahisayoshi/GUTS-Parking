@@ -3,7 +3,7 @@
   const appScreen = document.querySelector("#app-screen");
   const loginForm = document.querySelector("#login-form");
   const loginError = document.querySelector("#login-error");
-  const parkingGrid = document.querySelector("#parking-grid");
+  const boardSections = document.querySelector("#board-sections");
   const dialog = document.querySelector("#vehicle-dialog");
   const vehicleForm = document.querySelector("#vehicle-form");
   const formError = document.querySelector("#form-error");
@@ -14,13 +14,11 @@
   let lots = [];
   let vehicles = [];
   let vehicleTypes = [];
-  let activeBoard = "予備";
   let activeVehicleType = "all";
   let activeStatus = "all";
   let socket;
   let dragged = null;
   let suppressClick = false;
-  let pendingBoardRefresh = false;
 
   async function api(path, options = {}) {
     const response = await fetch(path, {
@@ -55,10 +53,7 @@
   }
 
   async function loadBoard() {
-    if (dragged) {
-      pendingBoardRefresh = true;
-      return;
-    }
+    if (dragged) return;
     const data = await api("/api/bootstrap");
     lots = data.parking_lots;
     vehicles = data.vehicles;
@@ -72,52 +67,167 @@
     return `type-color-${index}`;
   }
 
-  function vehiclesOnBoard() {
-    return vehicles.filter((vehicle) => vehicle.board_section === activeBoard);
-  }
-
   function render() {
-    const boardVehicles = vehiclesOnBoard();
-    parkingGrid.replaceChildren();
-    const unparked = boardVehicles.filter((vehicle) => vehicle.parking_lot_id === null);
-    parkingGrid.append(makeParkingCard({ id: "none", name: "未配置・予備置き場" }, unparked));
-    for (const lot of lots) {
-      const inLot = boardVehicles.filter((vehicle) => vehicle.parking_lot_id === lot.id);
-      parkingGrid.append(makeParkingCard(lot, inLot));
+    boardSections.replaceChildren();
+    for (const sectionName of ["本店貸出中", "駅前店貸出中", "予備"]) {
+      const section = document.createElement("section");
+      section.className = "board-section";
+      section.dataset.boardSection = sectionName;
+      const heading = document.createElement("div");
+      heading.className = "board-section-heading";
+      const title = document.createElement("h2");
+      title.textContent = sectionName;
+      const count = document.createElement("span");
+      const sectionVehicles = vehicles.filter((vehicle) => vehicle.board_section === sectionName);
+      count.textContent = `${sectionVehicles.length} 台`;
+      heading.append(title, count);
+      const parkingGrid = document.createElement("div");
+      parkingGrid.className = "parking-grid";
+      const unparked = sectionVehicles.filter((vehicle) => vehicle.parking_lot_id === null);
+      parkingGrid.append(makeParkingCard({
+        id: "none",
+        name: "未配置",
+        area_height: 210,
+        area_width: 1,
+      }, unparked, sectionName));
+      for (const lot of lots) {
+        const inLot = sectionVehicles.filter((vehicle) => vehicle.parking_lot_id === lot.id);
+        parkingGrid.append(makeParkingCard(lot, inLot, sectionName));
+      }
+      section.append(heading, parkingGrid);
+      boardSections.append(section);
     }
-    document.querySelector("#vehicle-count").textContent = boardVehicles.length;
+    document.querySelector("#vehicle-count").textContent = vehicles.length;
     document.querySelector("#lot-count").textContent = lots.length;
-    document.querySelector("#attention-count").textContent = boardVehicles.filter((vehicle) =>
+    document.querySelector("#attention-count").textContent = vehicles.filter((vehicle) =>
       statuses.some((status) => vehicle[status]),
     ).length;
-    document.querySelectorAll(".board-tab").forEach((tab) => {
-      const selected = tab.dataset.boardSection === activeBoard;
-      tab.classList.toggle("active", selected);
-      tab.setAttribute("aria-selected", String(selected));
-    });
-    renderVehicleCatalog(boardVehicles);
-    renderStatusList(boardVehicles);
+    renderVehicleCatalog(vehicles);
+    renderStatusList(vehicles);
   }
 
-  function makeParkingCard(lot, inLot) {
+  function makeParkingCard(lot, inLot, sectionName) {
     const card = document.createElement("article");
     card.className = `lot-card${lot.id === "none" ? " reserve-card" : ""}`;
+    card.dataset.lotId = lot.id;
     const heading = document.createElement("div");
     heading.className = "lot-heading";
+    if (lot.id !== "none") {
+      heading.draggable = true;
+      heading.title = "駐車場カードをドラッグして並べ替え";
+      heading.addEventListener("dragstart", (event) => {
+        if (event.target.closest("button")) {
+          event.preventDefault();
+          return;
+        }
+        event.dataTransfer.setData("text/plain", String(lot.id));
+        event.dataTransfer.effectAllowed = "move";
+        card.classList.add("reordering");
+      });
+      heading.addEventListener("dragend", () => card.classList.remove("reordering"));
+      card.addEventListener("dragover", (event) => {
+        if (event.dataTransfer.types.includes("text/plain")) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+        }
+      });
+      card.addEventListener("drop", (event) => {
+        event.preventDefault();
+        const sourceId = Number(event.dataTransfer.getData("text/plain"));
+        if (sourceId && sourceId !== lot.id) reorderLots(sourceId, lot.id).catch(showError);
+      });
+    }
+    const headingTitle = document.createElement("div");
+    headingTitle.className = "lot-heading-title";
     const title = document.createElement("h3");
     title.textContent = lot.name;
     const count = document.createElement("span");
     count.className = "lot-count";
     count.textContent = `${inLot.length} 台`;
-    heading.append(title, count);
+    headingTitle.append(title, count);
+    heading.append(headingTitle);
+    if (lot.id !== "none") {
+      const controls = document.createElement("div");
+      controls.className = "lot-controls";
+      const resize = document.createElement("button");
+      resize.type = "button";
+      resize.className = "lot-control";
+      resize.textContent = "尺寸";
+      resize.title = "顯示尺寸調整按鈕";
+      resize.addEventListener("click", () => {
+        card.classList.toggle("size-editing");
+        resize.textContent = card.classList.contains("size-editing") ? "完成" : "尺寸";
+      });
+      const shorter = makeLotControl("−", "減少高度", () => updateLotLayout(lot, {
+        area_height: Math.max(160, lot.area_height - 40),
+      }));
+      const taller = makeLotControl("+", "增加高度", () => updateLotLayout(lot, {
+        area_height: Math.min(600, lot.area_height + 40),
+      }));
+      const width = makeLotControl(lot.area_width === 2 ? "窄" : "寬", "切換寬度", () =>
+        updateLotLayout(lot, { area_width: lot.area_width === 2 ? 1 : 2 }));
+      const earlier = makeLotControl("←", "向前移一格", () => moveLot(lot.id, -1));
+      const later = makeLotControl("→", "向後移一格", () => moveLot(lot.id, 1));
+      controls.append(resize, shorter, taller, width, earlier, later);
+      heading.append(controls);
+    }
     const area = document.createElement("div");
     area.className = "lot-area";
     area.dataset.lotId = lot.id;
-    area.style.height = `${Math.max(210, Math.ceil(inLot.length / 4) * 52 + 24)}px`;
+    area.dataset.boardSection = sectionName;
+    area.style.height = `${Math.max(lot.area_height, Math.ceil(inLot.length / 4) * 52 + 24)}px`;
+    if (lot.area_width === 2) card.classList.add("lot-wide");
     if (!inLot.length) area.classList.add("empty");
     for (const vehicle of inLot) area.append(makeToken(vehicle));
     card.append(heading, area);
     return card;
+  }
+
+  function makeLotControl(label, title, onClick) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "lot-control size-control";
+    button.textContent = label;
+    button.title = title;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onClick().catch(showError);
+    });
+    return button;
+  }
+
+  async function updateLotLayout(lot, changes) {
+    await api(`/api/parking-lots/${lot.id}`, {
+      method: "PATCH",
+      body: JSON.stringify(changes),
+    });
+    await loadBoard();
+  }
+
+  async function reorderLots(sourceId, targetId) {
+    const ordered = lots.map((lot) => lot.id);
+    const sourceIndex = ordered.indexOf(sourceId);
+    if (sourceIndex < 0 || !ordered.includes(targetId)) return;
+    ordered.splice(sourceIndex, 1);
+    ordered.splice(ordered.indexOf(targetId), 0, sourceId);
+    await saveLotOrder(ordered);
+  }
+
+  async function moveLot(lotId, direction) {
+    const ordered = lots.map((lot) => lot.id);
+    const index = ordered.indexOf(lotId);
+    const next = index + direction;
+    if (index < 0 || next < 0 || next >= ordered.length) return;
+    [ordered[index], ordered[next]] = [ordered[next], ordered[index]];
+    await saveLotOrder(ordered);
+  }
+
+  async function saveLotOrder(ordered) {
+    await api("/api/parking-lots/order", {
+      method: "PUT",
+      body: JSON.stringify({ ids: ordered }),
+    });
+    await loadBoard();
   }
 
   function makeToken(vehicle) {
@@ -154,7 +264,6 @@
 
   function startDrag(event) {
     if (event.button !== 0 || dragged) return;
-    event.preventDefault();
     const token = event.currentTarget;
     const ghost = token.cloneNode(true);
     ghost.classList.add("dragging", "drag-ghost");
@@ -183,9 +292,9 @@
     if (!dragged.moved) return;
     dragged.ghost.style.left = `${event.clientX}px`;
     dragged.ghost.style.top = `${event.clientY}px`;
-    document.querySelectorAll(".board-tab.drop-target").forEach((tab) => tab.classList.remove("drop-target"));
+    document.querySelectorAll(".lot-area.drop-target").forEach((area) => area.classList.remove("drop-target"));
     document.elementFromPoint(event.clientX, event.clientY)
-      ?.closest(".board-tab")?.classList.add("drop-target");
+      ?.closest(".lot-area")?.classList.add("drop-target");
   }
 
   async function endDrag(event, cancelled = false) {
@@ -195,40 +304,28 @@
       ? document.elementFromPoint(event.clientX, event.clientY)
       : null;
     const dropArea = dropTarget?.closest(".lot-area");
-    const dropTab = dropTarget?.closest(".board-tab");
+    const dropSection = dropArea?.dataset.boardSection;
     dragged = null;
     current.ghost.remove();
-    document.querySelectorAll(".board-tab.drop-target").forEach((tab) => tab.classList.remove("drop-target"));
-    if (!current.moved) {
-      if (pendingBoardRefresh) {
-        pendingBoardRefresh = false;
-        await loadBoard();
-      }
-      return;
-    }
+    document.querySelectorAll(".lot-area.drop-target").forEach((area) => area.classList.remove("drop-target"));
+    if (!current.moved) return;
     suppressClick = true;
-    if (!dropArea && !dropTab) {
+    if (!dropArea || !dropSection) {
       window.setTimeout(() => { suppressClick = false; }, 0);
-      if (pendingBoardRefresh) {
-        pendingBoardRefresh = false;
-        await loadBoard();
-      }
       return;
     }
-    const position = dropArea ? (() => {
-      const rect = dropArea.getBoundingClientRect();
-      return {
-        position_x: Math.max(0, Math.min(1, (event.clientX - rect.left - rect.width * 0.08) / (rect.width * 0.84))),
-        position_y: Math.max(0, Math.min(1, (event.clientY - rect.top - rect.height * 0.1) / (rect.height * 0.8))),
-        parking_lot_id: dropArea.dataset.lotId === "none" ? null : Number(dropArea.dataset.lotId),
-      };
-    })() : { board_section: dropTab.dataset.boardSection };
+    const rect = dropArea.getBoundingClientRect();
+    const position = {
+      board_section: dropSection,
+      position_x: Math.max(0, Math.min(1, (event.clientX - rect.left - rect.width * 0.08) / (rect.width * 0.84))),
+      position_y: Math.max(0, Math.min(1, (event.clientY - rect.top - rect.height * 0.1) / (rect.height * 0.8))),
+      parking_lot_id: dropArea.dataset.lotId === "none" ? null : Number(dropArea.dataset.lotId),
+    };
     try {
       await api(`/api/vehicles/${current.id}`, {
         method: "PATCH",
         body: JSON.stringify(position),
       });
-      if (dropTab) activeBoard = dropTab.dataset.boardSection;
     } catch (error) {
       showError(error);
     }
@@ -261,7 +358,7 @@
       button.textContent = label;
       button.addEventListener("click", () => {
         activeVehicleType = value;
-        renderVehicleCatalog(vehiclesOnBoard());
+        renderVehicleCatalog(vehicles);
       });
       filters.append(button);
     }
@@ -292,10 +389,12 @@
       plate.textContent = vehicle.plate;
       const details = document.createElement("span");
       const lot = lots.find((entry) => entry.id === vehicle.parking_lot_id);
-      details.textContent = `${vehicle.vehicle_type} · ${lot?.name || "未配置"}${vehicle.options?.length ? ` · ${vehicle.options.join("・")}` : ""}`;
+      details.textContent = `${vehicle.board_section} · ${vehicle.vehicle_type} · ${lot?.name || "未配置"}${vehicle.options?.length ? ` · ${vehicle.options.join("・")}` : ""}`;
       item.append(plate, details);
       item.addEventListener("click", () => {
-        const location = document.querySelector(`[data-lot-id="${vehicle.parking_lot_id ?? "none"}"]`);
+        const section = [...document.querySelectorAll(".board-section")]
+          .find((entry) => entry.dataset.boardSection === vehicle.board_section);
+        const location = section?.querySelector(`[data-lot-id="${vehicle.parking_lot_id ?? "none"}"]`);
         location?.scrollIntoView({ behavior: "smooth", block: "center" });
         document.querySelector(`[data-id="${vehicle.id}"]`)?.focus({ preventScroll: true });
       });
@@ -324,10 +423,13 @@
       const description = document.createElement("span");
       const active = statuses.filter((status) => vehicle[status]).map((status) => statusLabels[status]);
       const lot = lots.find((entry) => entry.id === vehicle.parking_lot_id);
-      description.textContent = `${lot?.name || "未配置"} · ${active.join(" / ") || vehicle.vehicle_type}`;
+      description.textContent = `${vehicle.board_section} · ${lot?.name || "未配置"} · ${active.join(" / ") || vehicle.vehicle_type}`;
       item.append(plate, description);
       item.addEventListener("click", () => {
-        document.querySelector(`[data-lot-id="${vehicle.parking_lot_id ?? "none"}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+        const section = [...document.querySelectorAll(".board-section")]
+          .find((entry) => entry.dataset.boardSection === vehicle.board_section);
+        section?.querySelector(`[data-lot-id="${vehicle.parking_lot_id ?? "none"}"]`)
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
         document.querySelector(`[data-id="${vehicle.id}"]`)?.focus({ preventScroll: true });
       });
       list.append(item);
@@ -393,13 +495,6 @@
       showError(error);
     }
   });
-  document.querySelectorAll(".board-tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      activeBoard = tab.dataset.boardSection;
-      activeVehicleType = "all";
-      render();
-    });
-  });
   document.querySelector("#add-vehicle-button").addEventListener("click", () => openVehicle());
   document.querySelector("#close-dialog").addEventListener("click", () => dialog.close());
   document.querySelector("#cancel-dialog").addEventListener("click", () => dialog.close());
@@ -431,8 +526,6 @@
         method: id ? "PATCH" : "POST",
         body: JSON.stringify(payload),
       });
-      if (!id) activeBoard = "予備";
-      else activeBoard = payload.board_section;
       activeVehicleType = "all";
       dialog.close();
       await loadBoard();
@@ -444,7 +537,7 @@
     button.addEventListener("click", () => {
       activeStatus = button.dataset.filter;
       document.querySelectorAll(".filter-button").forEach((item) => item.classList.toggle("active", item === button));
-      renderStatusList(vehiclesOnBoard());
+      renderStatusList(vehicles);
     });
   });
   api("/api/me").then((result) => {
