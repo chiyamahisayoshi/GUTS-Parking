@@ -58,7 +58,7 @@ class RealtimeBoard {
     const origin = request.headers.origin;
     const forwardedProto = request.headers["x-forwarded-proto"]?.split(",")[0]?.trim();
     const expectedScheme = forwardedProto || (socket.encrypted ? "https" : "http");
-    if (origin && origin !== `${expectedScheme}://${request.headers.host}`) {
+    if (!origin || origin !== `${expectedScheme}://${request.headers.host}`) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
       return;
@@ -513,7 +513,7 @@ function createApplication(options = {}) {
     }
   });
 
-  app.delete("/api/vehicles/:id", requireUser, requireSameOrigin, (request, response) => {
+  app.delete("/api/vehicles/:id", requireUser, requireAdmin, requireSameOrigin, (request, response) => {
     const vehicleId = parseVehicleId(request.params.id);
     if (vehicleId === null) return response.status(404).json({ detail: "Vehicle not found." });
     const result = db.prepare("DELETE FROM vehicles WHERE id = ?").run(vehicleId);

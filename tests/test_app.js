@@ -169,6 +169,7 @@ test("operator accounts can use the board but cannot add vehicles or manage loca
   assert.equal((await staffAgent.put("/api/parking-lots/order").send({
     ids: Array.from({ length: 13 }, (_, index) => index + 1),
   })).status, 403);
+  assert.equal((await staffAgent.delete(`/api/vehicles/${vehicleId}`)).status, 403);
   const updated = await staffAgent.patch(`/api/vehicles/${vehicleId}`).send({ no_fuel: true });
   assert.equal(updated.status, 200);
   assert.equal(updated.body.no_fuel, true);
@@ -180,7 +181,9 @@ test("rejects cross-origin changes and broadcasts edits only to authenticated we
     .send({ plate: "forbidden" });
   assert.equal(crossOrigin.status, 403);
 
-  const unauthenticatedSocket = new WebSocket(`${baseUrl.replace("http", "ws")}/ws`);
+  const unauthenticatedSocket = new WebSocket(`${baseUrl.replace("http", "ws")}/ws`, {
+    headers: { Origin: baseUrl },
+  });
   const [, rejectedResponse] = await Promise.race([
     once(unauthenticatedSocket, "unexpected-response"),
     once(unauthenticatedSocket, "open").then(() => {
@@ -189,6 +192,18 @@ test("rejects cross-origin changes and broadcasts edits only to authenticated we
   ]);
   assert.equal(rejectedResponse.statusCode, 401);
   unauthenticatedSocket.terminate();
+
+  const missingOriginSocket = new WebSocket(`${baseUrl.replace("http", "ws")}/ws`, {
+    headers: { Cookie: sessionCookie },
+  });
+  const [, missingOriginResponse] = await Promise.race([
+    once(missingOriginSocket, "unexpected-response"),
+    once(missingOriginSocket, "open").then(() => {
+      throw new Error("Websocket connection without an Origin unexpectedly opened.");
+    }),
+  ]);
+  assert.equal(missingOriginResponse.statusCode, 403);
+  missingOriginSocket.terminate();
 
   const websocket = new WebSocket(`${baseUrl.replace("http", "ws")}/ws`, {
     headers: { Cookie: sessionCookie, Origin: baseUrl },
@@ -285,6 +300,17 @@ test("password hashes are unique, verifiable, and reject short passwords", async
 });
 
 test("deletes a vehicle and reports missing ids", async () => {
+  const staffAgent = request.agent(server);
+  application.db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)").run(
+    "delete-test-staff",
+    await hashPassword("staff-delete-test-password"),
+    "operator",
+  );
+  await staffAgent.post("/api/login").send({
+    username: "delete-test-staff",
+    password: "staff-delete-test-password",
+  });
+  assert.equal((await staffAgent.delete(`/api/vehicles/${vehicleId}`)).status, 403);
   const deleted = await agent.delete(`/api/vehicles/${vehicleId}`);
   assert.equal(deleted.status, 204);
   assert.equal((await agent.delete(`/api/vehicles/${vehicleId}`)).status, 404);

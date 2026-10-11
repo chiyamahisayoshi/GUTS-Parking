@@ -2,7 +2,7 @@
 
 租车公司使用的共享看板，整个项目使用 JavaScript/Node.js 24 开发。13 个位置全部平级显示：駐車場 1–9、“本店貸出中”、“駅前店貸出中”、“予備”和“立駐”。每个位置都能独立调整尺寸和排序；车辆可以拖放到任何位置的任意坐标。新车无需选择位置，默认放入“予備”。布局和车辆变化通过 SQLite 保存并实时同步到所有用户。系统另含按车型着色的车辆目录、洗车/加油/维修状态筛选，以及 ETC、车载器、禁烟/吸烟、导航和冬胎选项。账号使用 scrypt 加盐密码哈希，不记录车辆移动审计历史；不生成虚构车牌，请登录后录入实际车辆或接 ERP。
 
-任意位置卡片点“尺寸”后，拖动右下角把手即可调整宽度和高度；拖动卡片标题可重新排序，移动设备可点“尺寸”后用左右箭头排序。点击“位置を管理”可添加新位置、修改现有位置名称，并粘贴 Google 地图 HTTPS 导航链接；配置链接后，点击该位置卡片顶部的名称和车辆数即可在新标签页打开导航。清空链接并保存即可移除导航。改名不会影响其中的车辆。所有位置卡片处于同一网格，不存在门店分区与停车场的嵌套关系；位置布局保存在服务端，所有登录用户看到相同布局。
+管理员点击位置卡片上的「サイズ調整」后，可拖动右下角把手调整宽度和高度；拖动卡片标题可重新排序，移动设备也可使用左右按钮排序。点击「＋ 位置を管理」可添加位置、修改名称和粘贴 Google 地图 HTTPS 导航链接；配置链接后，点击卡片顶部的名称和车辆数即可在新标签页打开导航。清空链接并保存即可移除导航。改名不会影响其中的车辆。操作账号可以查看看板、移动和编辑现有车辆，但不能新增或删除车辆，也不能更改位置设置。所有位置卡片处于同一网格，不存在门店分区与停车场的嵌套关系；位置布局保存在服务端，所有登录用户看到相同布局。
 
 从旧版升级时会自动建立四个新增位置，并把旧“本店貸出中”、“駅前店貸出中”、“予備”分区的车辆分别迁入同名位置；车辆坐标、状态和装备选项保留。旧分区内的停车场归属不再适用，因此这批车辆会按原分区归类，而不是按旧停车场号归类。数据库迁移幂等，不会删除车辆。
 
@@ -14,13 +14,13 @@ ERP 后续可通过稳定的 `external_id` 和可选 API key 保护的同步接�
 
 ### 1. 安装宝塔和准备 VPS
 
-在 VPS 服务商防火墙开放 TCP **22、80** 和宝塔面板端口。通过 SSH 登录 Debian 12 后，使用宝塔官网当前提供的 Debian 安装命令安装面板。
+正式使用前先准备一个指向 VPS 的域名，并在 VPS 服务商防火墙开放 TCP **22、80、443** 和受限访问的宝塔面板端口。不要把公网 IP 的 HTTP 登录页用于真实账号或车辆数据：HTTP 会明文传输密码和会话 Cookie。通过 SSH 登录 Debian 12 后，使用宝塔官网当前提供的 Debian 安装命令安装面板。
 
 在宝塔左侧“软件商店”安装并启动 **Nginx**，再安装 **Node.js 版本管理器**并用它安装 **Node.js 24.x**。宝塔的 Node.js 版本管理器和 PM2 管理器插件可能互斥；本指南使用版本管理器随附的 `pm2` 命令，不要再安装 PM2 管理器。无需安装 Python、MySQL 或 Redis。
 
 ### 2. 添加网站并上传/克隆项目
 
-在宝塔“网站”中添加站点：域名栏填写 VPS 公网 IP（例如 `43.133.161.210`），目录使用默认值，PHP 选“纯静态/不使用 PHP”，数据库选“无/不创建”，FTP 不创建。网站目录仅作为 Nginx 入口；应用代码与数据库放在单独目录。
+在宝塔“网站”中添加站点：域名栏填写已解析到 VPS 的域名，目录使用默认值，PHP 选“纯静态/不使用 PHP”，数据库选“无/不创建”，FTP 不创建。网站目录仅作为 Nginx 入口；应用代码与数据库放在单独目录。
 
 以下命令假设 Node 版本管理器安装路径为 `/www/server/nodejs/v24.21.0`，应用运行用户为宝塔常见的 `www`。如果实际安装路径或用户不同，请替换为面板显示的值。PR 合并后从 `main` 获取代码：
 
@@ -55,7 +55,7 @@ su -s /bin/sh www -c 'export PATH=/www/server/nodejs/v24.21.0/bin:$PATH; cd /www
 cd /www/wwwroot/rentalcar-app
 NODE=/www/server/nodejs/v24.21.0/bin/node
 SECRET=$("$NODE" -e 'console.log(require("node:crypto").randomBytes(48).toString("base64url"))')
-printf 'SESSION_SECRET=%s\nDATABASE_PATH=/www/wwwroot/rentalcar-data/rentalcar.db\nCOOKIE_SECURE=0\nERP_API_KEY=\n' "$SECRET" > .env
+printf 'SESSION_SECRET=%s\nDATABASE_PATH=/www/wwwroot/rentalcar-data/rentalcar.db\nCOOKIE_SECURE=1\nERP_API_KEY=\n' "$SECRET" > .env
 chown www:www /www/wwwroot/rentalcar-app/.env
 chmod 600 /www/wwwroot/rentalcar-app/.env
 su -s /bin/sh www -c 'cd /www/wwwroot/rentalcar-app && /www/server/nodejs/v24.21.0/bin/node app/create-admin.js'
@@ -63,13 +63,13 @@ su -s /bin/sh www -c 'cd /www/wwwroot/rentalcar-app && /www/server/nodejs/v24.21
 
 按提示输入管理员用户名和密码。密码至少 12 个字符；输入时终端不显示字符是正常的。应用启动时会自动创建 SQLite 数据库和 13 个平级位置。再次运行最后一条管理员创建命令可添加其他账号。
 
-创建不能新增车辆或管理位置的普通操作账号（可查看看板、移动现有车辆及编辑车辆状态/资料），在宝塔终端执行以下命令两次；每次分别输入不同的用户名和密码：
+创建不能新增、删除车辆或管理位置的普通操作账号（可查看看板、移动现有车辆及编辑车辆状态/资料），在宝塔终端执行以下命令两次；每次分别输入不同的用户名和密码：
 
 ```bash
 su -s /bin/sh www -c 'export PATH=/www/server/nodejs/v24.21.0/bin:$PATH; cd /www/wwwroot/rentalcar-app && npm run create-operator'
 ```
 
-该账号的页面不会显示“車両を追加”或“位置を管理”入口，服务端也会拒绝新增车辆、创建/修改位置和调整位置顺序的请求。现有账号保持管理员权限；数据库会在更新后自动迁移，不需要重建账号或重启 VPS。
+该账号的页面不会显示车辆新增/删除或位置管理入口，服务端也会拒绝新增/删除车辆、创建/修改位置和调整位置顺序的请求。现有账号保持管理员权限；数据库会在更新后自动迁移，不需要重建账号或重启 VPS。
 
 ### 4. 用 PM2 启动应用
 
@@ -93,9 +93,9 @@ su -s /bin/sh www -c 'export PATH=/www/server/nodejs/v24.21.0/bin:$PATH; export 
 
 保持单进程；WebSocket 实时刷新依赖同一个应用进程。
 
-### 5. 在宝塔网站设置反向代理
+### 5. 配置 HTTPS 和宝塔反向代理
 
-在宝塔“网站”列表打开 IP 站点的“设置”→“反向代理”→“添加反向代理”，填写：
+先在宝塔“网站”列表打开域名站点的“设置”→“SSL”，申请并启用有效的 HTTPS 证书。然后在“反向代理”→“添加反向代理”填写：
 
 | 页面项目 | 填写内容 |
 | --- | --- |
@@ -114,11 +114,11 @@ proxy_set_header Upgrade $http_upgrade;
 proxy_set_header Connection "upgrade";
 ```
 
-访问 `http://你的VPS公网IP`。打开 `/api/me` 若显示 `{"authenticated":false}`，代表入口和代理正常；首页应显示登录页面。
+打开 `https://你的域名/api/me`，若显示 `{"authenticated":false}`，代表 HTTPS 入口和代理正常；首页应显示登录页面。Node 应用仍只监听本机 HTTP，TLS 由 Nginx 终止；不得向公网开放 8000 端口。
 
-### 6. 登录验收与 HTTP 安全
+### 6. 登录验收与安全
 
-用刚创建的账号登录，然后录入真实车辆。仅 IP 的 HTTP 访问不会加密登录密码，建议只在可信网络使用。HTTP 模式 `.env` 必须是 `COOKIE_SECURE=0`；若以后启用 HTTPS，再改成 `COOKIE_SECURE=1` 并重启应用。不要公开应用 8000 端口；宝塔面板端口最好限制为自己的 IP。
+通过 `https://你的域名` 登录并录入真实车辆。正式部署必须保持 `.env` 中 `COOKIE_SECURE=1`，这样登录会话 Cookie 仅通过 HTTPS 发送。若目前只有公网 IP、还没有域名与证书，请先不要录入正式密码或车辆资料；可先配置域名和 HTTPS，或仅通过 VPN/可信内网访问。宝塔面板端口也应限制为自己的 IP。
 
 ### 备份与快捷更新命令
 
@@ -151,7 +151,7 @@ rental update
 - **npm cache `EACCES` / `root-owned files`**：不要以 root 和 `www` 混用 npm 缓存；按上文将项目归 `www` 所有，并指定 `/www/wwwroot/rentalcar-data/npm-cache`。
 - **Node 版本管理器与 PM2 管理器互斥**：只用版本管理器附带的 PM2 命令。
 - **`.env` 变量名里出现反斜线**：必须写作 `SESSION_SECRET`、`DATABASE_PATH`，不要写成 `SESSION\_SECRET`。复制上面的代码块可避免手动输入错误。
-- **`/api/me` 能返回 JSON，但首页空白**：更新到修复 HTTP 安全策略的版本；纯 HTTP 使用 `COOKIE_SECURE=0`。
+- **`/api/me` 能返回 JSON，但首页空白**：确认已更新到最新版本并检查浏览器控制台和 PM2 日志；正式部署必须使用 HTTPS 和 `COOKIE_SECURE=1`。本地 HTTP 开发才临时使用 `COOKIE_SECURE=0`。
 
 ## 本地开发和测试
 
