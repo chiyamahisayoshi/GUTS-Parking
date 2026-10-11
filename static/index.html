@@ -36,7 +36,7 @@
       <section class="page-heading">
         <div><p class="eyebrow">LIVE FLEET OVERVIEW</p><h1>車両配置</h1><p class="muted">駐車場、貸出中エリア、予備、立駐はすべて同じ階層です。車両はどのエリアにも自由に移動できます。</p></div>
         <div class="page-actions">
-          <button id="manage-locations-button" class="quiet-button">位置を管理</button>
+          <button id="manage-locations-button" class="primary-button">＋ 位置を管理</button>
           <button id="add-vehicle-button" class="primary-button">＋ 車両を追加</button>
         </div>
       </section>
@@ -99,10 +99,11 @@
         <div><p class="eyebrow">PARKING LOCATIONS</p><h2>位置を管理</h2></div>
         <button type="button" id="close-location-dialog" class="close-button" aria-label="閉じる">×</button>
       </div>
-      <p class="muted">名前を変更して保存できます。名前を変えても、配置済みの車両はそのまま残ります。</p>
+      <p class="muted">名前とGoogleマップのナビリンクを設定できます。名前を変えても、配置済みの車両はそのまま残ります。</p>
       <div id="location-list" class="location-list"></div>
       <form id="add-location-form" class="add-location-form">
-        <label>新しい位置を追加<input name="name" required maxlength="40" placeholder="位置名"></label>
+        <label>新しい位置名<input name="name" required maxlength="40" placeholder="位置名"></label>
+        <label>ナビリンク（任意）<input name="navigation_url" type="url" maxlength="2000" placeholder="https://maps.app.goo.gl/..."></label>
         <button type="submit" class="primary-button">位置を追加</button>
       </form>
       <p id="location-error" class="error-message" role="alert"></p>

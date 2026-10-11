@@ -93,7 +93,7 @@
     heading.draggable = true;
     heading.title = "エリアカードをドラッグして並べ替え";
     heading.addEventListener("dragstart", (event) => {
-      if (event.target.closest("button")) {
+      if (event.target.closest("button, a, input")) {
         event.preventDefault();
         return;
       }
@@ -113,14 +113,30 @@
       const sourceId = Number(event.dataTransfer.getData("text/plain"));
       if (sourceId && sourceId !== lot.id) reorderLots(sourceId, lot.id).catch(showError);
     });
-    const headingTitle = document.createElement("div");
+    const headingTitle = lot.navigation_url
+      ? document.createElement("a")
+      : document.createElement("div");
     headingTitle.className = "lot-heading-title";
+    if (lot.navigation_url) {
+      headingTitle.href = lot.navigation_url;
+      headingTitle.target = "_blank";
+      headingTitle.rel = "noopener noreferrer";
+      headingTitle.setAttribute("aria-label", `${lot.name}のGoogleマップナビを開く`);
+      headingTitle.title = "Googleマップでナビを開く";
+    }
     const title = document.createElement("h3");
     title.textContent = lot.name;
     const count = document.createElement("span");
     count.className = "lot-count";
     count.textContent = `${inLot.length} 台`;
     headingTitle.append(title, count);
+    if (lot.navigation_url) {
+      const navigationIcon = document.createElement("span");
+      navigationIcon.className = "lot-navigation-icon";
+      navigationIcon.textContent = "↗";
+      navigationIcon.setAttribute("aria-hidden", "true");
+      headingTitle.append(navigationIcon);
+    }
     heading.append(headingTitle);
     const controls = document.createElement("div");
     controls.className = "lot-controls";
@@ -475,17 +491,23 @@
       input.required = true;
       input.value = lot.name;
       input.setAttribute("aria-label", `${lot.name}の位置名`);
+      const navigationInput = document.createElement("input");
+      navigationInput.type = "url";
+      navigationInput.maxLength = 2000;
+      navigationInput.value = lot.navigation_url || "";
+      navigationInput.placeholder = "Googleマップのナビリンク（任意）";
+      navigationInput.setAttribute("aria-label", `${lot.name}のGoogleマップナビリンク`);
       const save = document.createElement("button");
       save.type = "button";
-      save.className = "quiet-button";
-      save.textContent = "名前を保存";
+      save.className = "primary-button";
+      save.textContent = "保存";
       save.addEventListener("click", async () => {
         locationError.textContent = "";
-        if (!input.reportValidity()) return;
+        if (!input.reportValidity() || !navigationInput.reportValidity()) return;
         try {
           await api(`/api/parking-lots/${lot.id}`, {
             method: "PATCH",
-            body: JSON.stringify({ name: input.value }),
+            body: JSON.stringify({ name: input.value, navigation_url: navigationInput.value }),
           });
           await loadBoard();
           renderLocationManager();
@@ -493,7 +515,7 @@
           locationError.textContent = error.message;
         }
       });
-      row.append(input, save);
+      row.append(input, navigationInput, save);
       list.append(row);
     }
   }
@@ -570,10 +592,12 @@
     locationError.textContent = "";
     const form = event.currentTarget;
     const nameInput = form.elements.name;
+    const navigationInput = form.elements.navigation_url;
+    if (!nameInput.reportValidity() || !navigationInput.reportValidity()) return;
     try {
       await api("/api/parking-lots", {
         method: "POST",
-        body: JSON.stringify({ name: nameInput.value }),
+        body: JSON.stringify({ name: nameInput.value, navigation_url: navigationInput.value }),
       });
       form.reset();
       await loadBoard();
