@@ -135,7 +135,10 @@ function createApplication(options = {}) {
   app.set("trust proxy", 1);
   app.use(helmet({
     contentSecurityPolicy: {
-      directives: { styleSrc: ["'self'", "'unsafe-inline'"] },
+      directives: {
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        ...(cookieSecure ? {} : { upgradeInsecureRequests: null }),
+      },
     },
   }));
   app.use(express.json({ limit: "64kb" }));

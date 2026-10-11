@@ -47,7 +47,9 @@ after(async () => {
 });
 
 test("serves the browser UI but protects vehicle data until login", async () => {
-  assert.equal((await request(server).get("/")).status, 200);
+  const page = await request(server).get("/");
+  assert.equal(page.status, 200);
+  assert.doesNotMatch(page.headers["content-security-policy"], /upgrade-insecure-requests/);
   assert.equal((await request(server).get("/static/app.js")).status, 200);
   assert.deepEqual((await request(server).get("/api/me")).body, { authenticated: false });
   assert.equal((await request(server).get("/api/bootstrap")).status, 401);
