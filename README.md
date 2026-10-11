@@ -112,19 +112,25 @@ proxy_set_header Connection "upgrade";
 
 用刚创建的账号登录，然后录入真实车辆。仅 IP 的 HTTP 访问不会加密登录密码，建议只在可信网络使用。HTTP 模式 `.env` 必须是 `COOKIE_SECURE=0`；若以后启用 HTTPS，再改成 `COOKIE_SECURE=1` 并重启应用。不要公开应用 8000 端口；宝塔面板端口最好限制为自己的 IP。
 
-### 备份与更新
+### 备份与快捷更新命令
 
 数据库在 `/www/wwwroot/rentalcar-data/rentalcar.db`，不在公开的网站目录内。用宝塔计划任务定期备份此目录，并把副本保存到 VPS 以外。
 
-位置结构升级会自动迁移 SQLite 数据。先停止应用并备份数据库（保留好备份文件），再更新代码：
+首次设置一次即可：确认仓库已包含 `scripts/rental` 后，在宝塔终端以 root 运行下面命令。它安装一个 root 所有的全局命令入口；实际更新脚本以 `www` 用户运行，并随仓库更新，因此不会让 `www` 用户拥有 root 权限：
 
 ```bash
-su -s /bin/sh www -c 'export PATH=/www/server/nodejs/v24.21.0/bin:$PATH; export PM2_HOME=/www/wwwroot/rentalcar-data/.pm2; pm2 stop rentalcar'
-cp /www/wwwroot/rentalcar-data/rentalcar.db /www/wwwroot/rentalcar-data/rentalcar.db.before-location-migration-$(date +%Y%m%d-%H%M%S)
-su -s /bin/sh www -c 'export PATH=/www/server/nodejs/v24.21.0/bin:$PATH; export PM2_HOME=/www/wwwroot/rentalcar-data/.pm2; cd /www/wwwroot/rentalcar-app && git pull --ff-only && npm ci --omit=dev --cache /www/wwwroot/rentalcar-data/npm-cache && pm2 restart rentalcar'
+install -o root -g root -m 755 /www/wwwroot/rentalcar-app/scripts/rental-command /usr/local/bin/rental
 ```
 
-再次运行 `curl -I http://127.0.0.1:8000/` 确认返回 `200 OK`。迁移只重排车辆所在位置，不删除车辆；原有的分区车辆会进入同名独立位置，原有坐标和状态保留。
+此后每次更新只需在宝塔终端输入：
+
+```bash
+rental update
+```
+
+更新时脚本会检查本地代码是否干净、确认能安全快进到 `origin/main`，然后停止应用、检查点 SQLite WAL 并备份数据库、更新代码和生产依赖、重启 PM2，最后检查本机 HTTP 是否正常。若更新中途失败，会尝试重新启动应用；数据库备份保留在 `/www/wwwroot/rentalcar-data/`，不会自动删除。运行 `rental status` 可以查看服务状态。命令从 root 终端运行；正常情况无需再手动执行多条 `su` 或 Git 命令。
+
+位置结构升级会由应用启动时自动迁移；脚本备份数据库，迁移不删除车辆。
 
 当前单进程和 SQLite 适合单台 VPS 与约 250 台车。扩展到多进程/多服务器时，应改用共享数据库与消息通道。
 

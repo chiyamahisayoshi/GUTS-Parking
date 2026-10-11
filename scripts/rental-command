@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+APP_DIR="${RENTAL_APP_DIR:-/www/wwwroot/rentalcar-app}"
+DATA_DIR="${RENTAL_DATA_DIR:-/www/wwwroot/rentalcar-data}"
+NODE_BIN="${RENTAL_NODE_BIN:-/www/server/nodejs/v24.21.0/bin/node}"
+NODE_DIR="$(dirname "$NODE_BIN")"
+RUN_USER="${RENTAL_USER:-www}"
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Run rental commands from the VPS root shell." >&2
+  exit 1
+fi
+if [ ! -x "$APP_DIR/scripts/rental" ]; then
+  echo "Rental update script not found: $APP_DIR/scripts/rental" >&2
+  exit 1
+fi
+
+exec runuser -u "$RUN_USER" -- env \
+  PATH="$NODE_DIR:$PATH" \
+  PM2_HOME="${RENTAL_PM2_HOME:-$DATA_DIR/.pm2}" \
+  RENTAL_APP_DIR="$APP_DIR" \
+  RENTAL_DATA_DIR="$DATA_DIR" \
+  RENTAL_NODE_BIN="$NODE_BIN" \
+  RENTAL_USER="$RUN_USER" \
+  RENTAL_PM2_HOME="${RENTAL_PM2_HOME:-$DATA_DIR/.pm2}" \
+  RENTAL_BRANCH="${RENTAL_BRANCH:-main}" \
+  RENTAL_PORT="${RENTAL_PORT:-8000}" \
+  RENTAL_SERVICE_NAME="${RENTAL_SERVICE_NAME:-rentalcar}" \
+  "$APP_DIR/scripts/rental" "$@"
