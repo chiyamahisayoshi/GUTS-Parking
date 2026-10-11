@@ -143,14 +143,14 @@
     const resize = document.createElement("button");
     resize.type = "button";
     resize.className = "lot-control";
-    resize.textContent = "尺寸";
+    resize.textContent = "サイズ調整";
     resize.title = "クリック後、右下のハンドルをドラッグしてサイズを調整";
     resize.addEventListener("click", () => {
       card.classList.toggle("size-editing");
-      resize.textContent = card.classList.contains("size-editing") ? "完成" : "尺寸";
+      resize.textContent = card.classList.contains("size-editing") ? "完了" : "サイズ調整";
     });
-    const earlier = makeLotControl("←", "向前移一格", () => moveLot(lot.id, -1));
-    const later = makeLotControl("→", "向後移一格", () => moveLot(lot.id, 1));
+    const earlier = makeLotControl("←", "左へ移動", () => moveLot(lot.id, -1));
+    const later = makeLotControl("→", "右へ移動", () => moveLot(lot.id, 1));
     controls.append(resize, earlier, later);
     heading.append(controls);
     const area = document.createElement("div");
