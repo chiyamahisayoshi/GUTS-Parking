@@ -324,27 +324,61 @@ test("persists parking lot size and order and rejects invalid layouts", async ()
 });
 
 test("adds locations and renames them without moving their vehicles", async () => {
-  const created = await agent.post("/api/parking-lots").send({ name: "洗車待ち" });
+  const navigationUrl = "https://maps.app.goo.gl/example";
+  const created = await agent.post("/api/parking-lots").send({
+    name: "洗車待ち",
+    navigation_url: navigationUrl,
+  });
   assert.equal(created.status, 201);
   assert.deepEqual(
     [created.body.name, created.body.display_order, created.body.area_height, created.body.area_width],
     ["洗車待ち", 13, 210, 50],
   );
+  assert.equal(created.body.navigation_url, navigationUrl);
   assert.equal((await agent.post("/api/parking-lots").send({ name: "洗車待ち" })).status, 409);
   assert.equal((await agent.post("/api/parking-lots").send({ name: "   " })).status, 422);
   assert.equal((await agent.post("/api/parking-lots").send({ name: "x".repeat(41) })).status, 422);
+  assert.equal((await agent.post("/api/parking-lots").send({
+    name: "不正リンク",
+    navigation_url: "https://attacker.example/maps",
+  })).status, 422);
+  assert.equal((await agent.post("/api/parking-lots").send({
+    name: "HTTPリンク",
+    navigation_url: "http://maps.google.com/maps",
+  })).status, 422);
+  assert.equal((await agent.post("/api/parking-lots").send({
+    name: "偽装リンク",
+    navigation_url: "https://attacker.example@maps.google.com/maps",
+  })).status, 422);
   const vehicle = await agent.post("/api/vehicles").send({
     plate: "位置変更 100 あ 0001",
     vehicle_type: "A-1",
     parking_lot_id: created.body.id,
   });
   assert.equal(vehicle.status, 201);
-  const renamed = await agent.patch(`/api/parking-lots/${created.body.id}`).send({ name: "洗車エリア" });
+  const renamed = await agent.patch(`/api/parking-lots/${created.body.id}`).send({
+    name: "洗車エリア",
+    navigation_url: "https://www.google.com/maps/dir/?api=1",
+  });
   assert.equal(renamed.status, 200);
   assert.equal(renamed.body.name, "洗車エリア");
+  assert.equal(renamed.body.navigation_url, "https://www.google.com/maps/dir/?api=1");
+  assert.equal((await agent.patch(`/api/parking-lots/${created.body.id}`).send({
+    navigation_url: "https://www.google.com.evil.example/maps",
+  })).status, 422);
+  const cleared = await agent.patch(`/api/parking-lots/${created.body.id}`).send({ navigation_url: "" });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.navigation_url, "");
+  await agent.patch(`/api/parking-lots/${created.body.id}`).send({
+    navigation_url: "https://www.google.com/maps/search/?api=1",
+  });
   assert.equal((await agent.patch(`/api/parking-lots/${created.body.id}`).send({ name: "駐車場 1" })).status, 409);
   const bootstrap = await agent.get("/api/bootstrap");
   assert.equal(bootstrap.body.parking_lots.find((lot) => lot.id === created.body.id).name, "洗車エリア");
+  assert.equal(
+    bootstrap.body.parking_lots.find((lot) => lot.id === created.body.id).navigation_url,
+    "https://www.google.com/maps/search/?api=1",
+  );
   assert.equal(
     bootstrap.body.vehicles.find((entry) => entry.id === vehicle.body.id).parking_lot_id,
     created.body.id,
@@ -404,6 +438,7 @@ test("flattens previous board sections into peer locations without losing vehicl
     assert.equal(migrated.prepare("SELECT COUNT(*) AS count FROM parking_lots").get().count, 13);
     const lot = migrated.prepare("SELECT * FROM parking_lots WHERE id = 4").get();
     assert.deepEqual([lot.display_order, lot.area_height, lot.area_width], [3, 210, 50]);
+    assert.equal(lot.navigation_url, "");
     assert.equal(migrated.prepare("SELECT area_width FROM parking_lots WHERE id = 7").get().area_width, 100);
     migrated.close();
   } finally {

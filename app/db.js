@@ -30,7 +30,8 @@ function openDatabase(databasePath) {
       name TEXT NOT NULL UNIQUE,
       display_order INTEGER NOT NULL DEFAULT 0,
       area_height INTEGER NOT NULL DEFAULT 210,
-      area_width INTEGER NOT NULL DEFAULT 50
+      area_width INTEGER NOT NULL DEFAULT 50,
+      navigation_url TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS vehicles (
       id INTEGER PRIMARY KEY,
@@ -69,6 +70,9 @@ function openDatabase(databasePath) {
   }
   if (!lotColumns.has("area_width")) {
     db.exec("ALTER TABLE parking_lots ADD COLUMN area_width INTEGER NOT NULL DEFAULT 50");
+  }
+  if (!lotColumns.has("navigation_url")) {
+    db.exec("ALTER TABLE parking_lots ADD COLUMN navigation_url TEXT NOT NULL DEFAULT ''");
   }
   if (!columns.has("options")) {
     db.exec("ALTER TABLE vehicles ADD COLUMN options TEXT NOT NULL DEFAULT '[]'");

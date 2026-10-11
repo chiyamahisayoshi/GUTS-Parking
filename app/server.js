@@ -21,6 +21,20 @@ const POSITION_GRID = Array.from({ length: 32 }, (_, index) => [
 ]);
 const DUMMY_PASSWORD_HASH = "scrypt$16384$8$1$00112233445566778899aabbccddeeff$".concat("00".repeat(64));
 
+function isGoogleMapsUrl(value) {
+  if (typeof value !== "string" || value.length > 2000) return false;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || url.port) return false;
+    if (["maps.app.goo.gl", "maps.google.com"].includes(url.hostname)) return true;
+    if (url.hostname === "goo.gl") return url.pathname.startsWith("/maps");
+    return ["google.com", "www.google.com", "www.google.co.jp", "google.co.jp"].includes(url.hostname) &&
+      url.pathname.startsWith("/maps");
+  } catch {
+    return false;
+  }
+}
+
 class RealtimeBoard {
   constructor(db, sessionSecret) {
     this.db = db;
@@ -236,7 +250,7 @@ function createApplication(options = {}) {
 
   app.get("/api/bootstrap", requireUser, (_request, response) => {
     const parkingLots = db.prepare(
-      "SELECT id, name, display_order, area_height, area_width FROM parking_lots ORDER BY display_order, id",
+      "SELECT id, name, display_order, area_height, area_width, navigation_url FROM parking_lots ORDER BY display_order, id",
     ).all();
     const vehicles = db.prepare(`
       SELECT id, external_id, plate, vehicle_type, parking_lot_id,
@@ -253,20 +267,25 @@ function createApplication(options = {}) {
 
   app.post("/api/parking-lots", requireUser, requireSameOrigin, (request, response, next) => {
     const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
+    const rawNavigationUrl = request.body?.navigation_url ?? "";
+    const navigationUrl = typeof rawNavigationUrl === "string" ? rawNavigationUrl.trim() : rawNavigationUrl;
     if (!name || name.length > 40) {
       return response.status(422).json({ detail: "Parking location name must be between 1 and 40 characters." });
+    }
+    if (navigationUrl !== "" && !isGoogleMapsUrl(navigationUrl)) {
+      return response.status(422).json({ detail: "Navigation link must be a valid HTTPS Google Maps URL." });
     }
     if (db.prepare("SELECT 1 FROM parking_lots WHERE name = ? COLLATE NOCASE").get(name)) {
       return response.status(409).json({ detail: "A parking location with that name already exists." });
     }
     try {
       const result = db.prepare(`
-        INSERT INTO parking_lots (name, display_order, area_height, area_width)
-        VALUES (?, (SELECT COALESCE(MAX(display_order), -1) + 1 FROM parking_lots), 210, 50)
-      `).run(name);
+        INSERT INTO parking_lots (name, display_order, area_height, area_width, navigation_url)
+        VALUES (?, (SELECT COALESCE(MAX(display_order), -1) + 1 FROM parking_lots), 210, 50, ?)
+      `).run(name, navigationUrl);
       realtime.notify();
       response.status(201).json(db.prepare(
-        "SELECT id, name, display_order, area_height, area_width FROM parking_lots WHERE id = ?",
+        "SELECT id, name, display_order, area_height, area_width, navigation_url FROM parking_lots WHERE id = ?",
       ).get(result.lastInsertRowid));
     } catch (error) {
       if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
@@ -283,17 +302,27 @@ function createApplication(options = {}) {
       if (!lot) return response.status(404).json({ detail: "Parking lot not found." });
       const body = request.body || {};
       const entries = Object.entries(body);
-      if (!entries.length || entries.some(([key]) => !["name", "area_height", "area_width"].includes(key))) {
-        return response.status(422).json({ detail: "Only parking location name and size can be changed." });
+      if (!entries.length || entries.some(([key]) =>
+        !["name", "navigation_url", "area_height", "area_width"].includes(key))) {
+        return response.status(422).json({ detail: "Only parking location name, navigation link, and size can be changed." });
       }
-      const { name: rawName, area_height: height, area_width: width } = body;
+      const {
+        name: rawName,
+        navigation_url: rawNavigationUrl,
+        area_height: height,
+        area_width: width,
+      } = body;
       const name = typeof rawName === "string" ? rawName.trim() : rawName;
+      const navigationUrl = typeof rawNavigationUrl === "string" ? rawNavigationUrl.trim() : rawNavigationUrl;
       if (rawName !== undefined && (typeof name !== "string" || !name || name.length > 40)) {
         return response.status(422).json({ detail: "Parking location name must be between 1 and 40 characters." });
       }
       if (name !== undefined &&
           db.prepare("SELECT 1 FROM parking_lots WHERE name = ? COLLATE NOCASE AND id != ?").get(name, lotId)) {
         return response.status(409).json({ detail: "A parking location with that name already exists." });
+      }
+      if (navigationUrl !== undefined && navigationUrl !== "" && !isGoogleMapsUrl(navigationUrl)) {
+        return response.status(422).json({ detail: "Navigation link must be a valid HTTPS Google Maps URL." });
       }
       if (height !== undefined && (!Number.isInteger(height) || height < 160 || height > 600)) {
         return response.status(422).json({ detail: "Parking area height must be between 160 and 600 pixels." });
@@ -303,12 +332,13 @@ function createApplication(options = {}) {
       }
       const values = Object.fromEntries(entries);
       if (name !== undefined) values.name = name;
+      if (navigationUrl !== undefined) values.navigation_url = navigationUrl;
       const assignments = Object.keys(values).map((key) => `${key} = ?`).join(", ");
       db.prepare(`UPDATE parking_lots SET ${assignments} WHERE id = ?`)
         .run(...Object.values(values), lotId);
       realtime.notify();
       response.json(db.prepare(
-        "SELECT id, name, display_order, area_height, area_width FROM parking_lots WHERE id = ?",
+        "SELECT id, name, display_order, area_height, area_width, navigation_url FROM parking_lots WHERE id = ?",
       ).get(lotId));
     } catch (error) {
       if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
