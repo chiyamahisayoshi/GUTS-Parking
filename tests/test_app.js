@@ -89,7 +89,9 @@ test("logs in with hashed credentials and seeds thirteen peer locations", async 
   assert.deepEqual((await agent.get("/api/me")).body, {
     authenticated: true,
     username: "operator",
+    can_manage: true,
   });
+  assert.equal(login.body.can_manage, true);
   const bootstrap = await agent.get("/api/bootstrap");
   assert.equal(bootstrap.status, 200);
   assert.equal(bootstrap.body.parking_lots.length, 13);
@@ -137,6 +139,39 @@ test("creates vehicles in separate positions and validates updates", async () =>
     plate: "No auth",
     vehicle_type: "standard",
   })).status, 401);
+});
+
+test("operator accounts can use the board but cannot add vehicles or manage locations", async () => {
+  application.db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)").run(
+    "staff",
+    await hashPassword("staff-password-strong"),
+    "operator",
+  );
+  const staffAgent = request.agent(server);
+  const login = await staffAgent.post("/api/login").send({
+    username: "staff",
+    password: "staff-password-strong",
+  });
+  assert.equal(login.status, 200);
+  assert.equal(login.body.can_manage, false);
+  assert.deepEqual((await staffAgent.get("/api/me")).body, {
+    authenticated: true,
+    username: "staff",
+    can_manage: false,
+  });
+  assert.equal((await staffAgent.get("/api/bootstrap")).status, 200);
+  assert.equal((await staffAgent.post("/api/vehicles").send({
+    plate: "staff-add-denied",
+    vehicle_type: "A-1",
+  })).status, 403);
+  assert.equal((await staffAgent.post("/api/parking-lots").send({ name: "staff-add-denied" })).status, 403);
+  assert.equal((await staffAgent.patch("/api/parking-lots/1").send({ name: "staff-rename-denied" })).status, 403);
+  assert.equal((await staffAgent.put("/api/parking-lots/order").send({
+    ids: Array.from({ length: 13 }, (_, index) => index + 1),
+  })).status, 403);
+  const updated = await staffAgent.patch(`/api/vehicles/${vehicleId}`).send({ no_fuel: true });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.no_fuel, true);
 });
 
 test("rejects cross-origin changes and broadcasts edits only to authenticated websockets", async () => {
@@ -398,6 +433,12 @@ test("flattens previous board sections into peer locations without losing vehicl
       area_height INTEGER NOT NULL DEFAULT 210,
       area_width INTEGER NOT NULL DEFAULT 1
     );
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE TABLE vehicles (
       id INTEGER PRIMARY KEY,
       external_id TEXT UNIQUE,
@@ -439,6 +480,8 @@ test("flattens previous board sections into peer locations without losing vehicl
     const lot = migrated.prepare("SELECT * FROM parking_lots WHERE id = 4").get();
     assert.deepEqual([lot.display_order, lot.area_height, lot.area_width], [3, 210, 50]);
     assert.equal(lot.navigation_url, "");
+    assert.equal(migrated.prepare("PRAGMA table_info(users)").all().find((column) =>
+      column.name === "role").dflt_value, "'admin'");
     assert.equal(migrated.prepare("SELECT area_width FROM parking_lots WHERE id = 7").get().area_width, 100);
     migrated.close();
   } finally {

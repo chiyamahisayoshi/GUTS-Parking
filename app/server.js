@@ -178,6 +178,16 @@ function createApplication(options = {}) {
 
   function requireUser(request, response, next) {
     if (!request.session.username) return response.status(401).json({ detail: "Please sign in." });
+    const user = db.prepare("SELECT role FROM users WHERE username = ?").get(request.session.username);
+    if (!user) return response.status(401).json({ detail: "Please sign in." });
+    request.session.role = user.role;
+    next();
+  }
+
+  function requireAdmin(request, response, next) {
+    if (request.session.role !== "admin") {
+      return response.status(403).json({ detail: "Administrator permission is required." });
+    }
     next();
   }
 
@@ -198,7 +208,13 @@ function createApplication(options = {}) {
   app.use(express.static(STATIC_DIR));
   app.get("/api/me", (request, response) => {
     if (!request.session.username) return response.json({ authenticated: false });
-    response.json({ authenticated: true, username: request.session.username });
+    const user = db.prepare("SELECT role FROM users WHERE username = ?").get(request.session.username);
+    if (!user) return response.json({ authenticated: false });
+    response.json({
+      authenticated: true,
+      username: request.session.username,
+      can_manage: user.role === "admin",
+    });
   });
 
   app.post(
@@ -219,7 +235,7 @@ function createApplication(options = {}) {
         ) {
           return response.status(422).json({ detail: "Valid username and password are required." });
         }
-        const row = db.prepare("SELECT password_hash FROM users WHERE username = ?").get(username.trim());
+        const row = db.prepare("SELECT password_hash, role FROM users WHERE username = ?").get(username.trim());
         const matches = await verifyPassword(password, row?.password_hash || DUMMY_PASSWORD_HASH);
         if (!row || !matches) {
           return response.status(401).json({ detail: "Username or password is incorrect." });
@@ -227,9 +243,13 @@ function createApplication(options = {}) {
         request.session.regenerate((error) => {
           if (error) return next(error);
           request.session.username = username.trim();
+          request.session.role = row.role;
           request.session.save((saveError) => {
             if (saveError) return next(saveError);
-            response.json({ username: request.session.username });
+            response.json({
+              username: request.session.username,
+              can_manage: request.session.role === "admin",
+            });
           });
         });
       } catch (error) {
@@ -265,7 +285,7 @@ function createApplication(options = {}) {
     });
   });
 
-  app.post("/api/parking-lots", requireUser, requireSameOrigin, (request, response, next) => {
+  app.post("/api/parking-lots", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
     const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
     const rawNavigationUrl = request.body?.navigation_url ?? "";
     const navigationUrl = typeof rawNavigationUrl === "string" ? rawNavigationUrl.trim() : rawNavigationUrl;
@@ -295,7 +315,7 @@ function createApplication(options = {}) {
     }
   });
 
-  app.patch("/api/parking-lots/:id", requireUser, requireSameOrigin, (request, response, next) => {
+  app.patch("/api/parking-lots/:id", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
     try {
       const lotId = parseVehicleId(request.params.id);
       const lot = lotId === null ? null : db.prepare("SELECT * FROM parking_lots WHERE id = ?").get(lotId);
@@ -348,7 +368,7 @@ function createApplication(options = {}) {
     }
   });
 
-  app.put("/api/parking-lots/order", requireUser, requireSameOrigin, (request, response, next) => {
+  app.put("/api/parking-lots/order", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
     const { ids } = request.body || {};
     const actualIds = db.prepare("SELECT id FROM parking_lots").all().map((lot) => lot.id).sort((a, b) => a - b);
     if (!Array.isArray(ids) || ids.length !== actualIds.length ||
@@ -369,7 +389,7 @@ function createApplication(options = {}) {
     }
   });
 
-  app.post("/api/vehicles", requireUser, requireSameOrigin, (request, response, next) => {
+  app.post("/api/vehicles", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
     try {
       const body = request.body || {};
       const { plate, vehicle_type: vehicleType } = body;

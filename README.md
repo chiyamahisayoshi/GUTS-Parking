@@ -63,6 +63,14 @@ su -s /bin/sh www -c 'cd /www/wwwroot/rentalcar-app && /www/server/nodejs/v24.21
 
 按提示输入管理员用户名和密码。密码至少 12 个字符；输入时终端不显示字符是正常的。应用启动时会自动创建 SQLite 数据库和 13 个平级位置。再次运行最后一条管理员创建命令可添加其他账号。
 
+创建不能新增车辆或管理位置的普通操作账号（可查看看板、移动现有车辆及编辑车辆状态/资料），在宝塔终端执行以下命令两次；每次分别输入不同的用户名和密码：
+
+```bash
+su -s /bin/sh www -c 'export PATH=/www/server/nodejs/v24.21.0/bin:$PATH; cd /www/wwwroot/rentalcar-app && npm run create-operator'
+```
+
+该账号的页面不会显示“車両を追加”或“位置を管理”入口，服务端也会拒绝新增车辆、创建/修改位置和调整位置顺序的请求。现有账号保持管理员权限；数据库会在更新后自动迁移，不需要重建账号或重启 VPS。
+
 ### 4. 用 PM2 启动应用
 
 使用 Node.js 版本管理器随附的 PM2 命令启动单个进程；不要额外安装可能互斥的 PM2 管理器插件：
