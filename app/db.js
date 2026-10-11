@@ -2,9 +2,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 
-const LOT_NAMES = Array.from({ length: 9 }, (_, index) => `駐車場 ${index + 1}`);
+const LOT_NAMES = [
+  ...Array.from({ length: 9 }, (_, index) => `駐車場 ${index + 1}`),
+  "本店貸出中",
+  "駅前店貸出中",
+  "予備",
+  "立駐",
+];
 const VEHICLE_TYPES = ["A-1", "A-2", "A-2P", "B", "B軽トラ", "C-1", "C-2", "D", "H-1", "H-2", "その他"];
-const BOARD_SECTIONS = ["本店貸出中", "駅前店貸出中", "予備"];
 const VEHICLE_OPTIONS = ["ETC", "車載器", "禁煙", "喫煙", "ナビ", "スタッドレス"];
 
 function openDatabase(databasePath) {
@@ -38,13 +43,16 @@ function openDatabase(databasePath) {
       unwashed INTEGER NOT NULL DEFAULT 0 CHECK(unwashed IN (0, 1)),
       no_fuel INTEGER NOT NULL DEFAULT 0 CHECK(no_fuel IN (0, 1)),
       needs_repair INTEGER NOT NULL DEFAULT 0 CHECK(needs_repair IN (0, 1)),
-      board_section TEXT NOT NULL DEFAULT '予備',
       options TEXT NOT NULL DEFAULT '[]'
     );
     CREATE TABLE IF NOT EXISTS sessions (
       sid TEXT PRIMARY KEY,
       sess TEXT NOT NULL,
       expires INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      name TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS vehicles_lot_idx ON vehicles(parking_lot_id);
     CREATE INDEX IF NOT EXISTS vehicles_plate_idx ON vehicles(plate);
@@ -62,9 +70,6 @@ function openDatabase(databasePath) {
   if (!lotColumns.has("area_width")) {
     db.exec("ALTER TABLE parking_lots ADD COLUMN area_width INTEGER NOT NULL DEFAULT 1");
   }
-  if (!columns.has("board_section")) {
-    db.exec("ALTER TABLE vehicles ADD COLUMN board_section TEXT NOT NULL DEFAULT '予備'");
-  }
   if (!columns.has("options")) {
     db.exec("ALTER TABLE vehicles ADD COLUMN options TEXT NOT NULL DEFAULT '[]'");
   }
@@ -79,10 +84,27 @@ function openDatabase(databasePath) {
     END
     WHERE vehicle_type NOT IN ('A-1', 'A-2', 'A-2P', 'B', 'B軽トラ', 'C-1', 'C-2', 'D', 'H-1', 'H-2', 'その他')
   `);
-  const addLot = db.prepare("INSERT OR IGNORE INTO parking_lots (name) VALUES (?)");
+  const addLot = db.prepare("INSERT OR IGNORE INTO parking_lots (name, display_order) VALUES (?, ?)");
   db.exec("BEGIN IMMEDIATE");
   try {
-    for (const name of LOT_NAMES) addLot.run(name);
+    LOT_NAMES.forEach((name, index) => addLot.run(name, index));
+    const migration = "flatten-board-sections-into-locations";
+    if (columns.has("board_section") &&
+        !db.prepare("SELECT 1 FROM schema_migrations WHERE name = ?").get(migration)) {
+      const moveToLocation = db.prepare(`
+        UPDATE vehicles
+        SET parking_lot_id = (
+          SELECT id FROM parking_lots WHERE name = ?
+        )
+        WHERE board_section = ?
+      `);
+      for (const name of ["本店貸出中", "駅前店貸出中", "予備"]) {
+        moveToLocation.run(name, name);
+      }
+      db.prepare("INSERT INTO schema_migrations (name) VALUES (?)").run(migration);
+    }
+    const reserveLotId = db.prepare("SELECT id FROM parking_lots WHERE name = '予備'").get().id;
+    db.prepare("UPDATE vehicles SET parking_lot_id = ? WHERE parking_lot_id IS NULL").run(reserveLotId);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -92,4 +114,4 @@ function openDatabase(databasePath) {
   return db;
 }
 
-module.exports = { BOARD_SECTIONS, LOT_NAMES, VEHICLE_OPTIONS, VEHICLE_TYPES, openDatabase };
+module.exports = { LOT_NAMES, VEHICLE_OPTIONS, VEHICLE_TYPES, openDatabase };

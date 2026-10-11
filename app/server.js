@@ -9,7 +9,7 @@ const signature = require("cookie-signature");
 const { rateLimit } = require("express-rate-limit");
 const { WebSocket, WebSocketServer } = require("ws");
 
-const { BOARD_SECTIONS, VEHICLE_OPTIONS, VEHICLE_TYPES, openDatabase } = require("./db");
+const { VEHICLE_OPTIONS, VEHICLE_TYPES, openDatabase } = require("./db");
 const { SQLiteSessionStore } = require("./session-store");
 const { hashPassword, verifyPassword } = require("./security");
 
@@ -92,7 +92,7 @@ class RealtimeBoard {
 }
 
 function vehicleFromRow(row) {
-  const vehicle = { ...row };
+  const { board_section: _legacyBoardSection, ...vehicle } = row;
   for (const status of STATUSES) vehicle[status] = Boolean(vehicle[status]);
   try {
     vehicle.options = JSON.parse(vehicle.options || "[]");
@@ -240,14 +240,12 @@ function createApplication(options = {}) {
     ).all();
     const vehicles = db.prepare(`
       SELECT id, external_id, plate, vehicle_type, parking_lot_id,
-             position_x, position_y, unwashed, no_fuel, needs_repair,
-             board_section, options
+             position_x, position_y, unwashed, no_fuel, needs_repair, options
       FROM vehicles ORDER BY plate, id
     `).all().map(vehicleFromRow);
     response.json({
       parking_lots: parkingLots,
       vehicles,
-      board_sections: BOARD_SECTIONS,
       vehicle_types: VEHICLE_TYPES,
       vehicle_options: VEHICLE_OPTIONS,
     });
@@ -304,24 +302,27 @@ function createApplication(options = {}) {
 
   app.post("/api/vehicles", requireUser, requireSameOrigin, (request, response, next) => {
     try {
-      const { plate, vehicle_type: vehicleType, parking_lot_id: lotId } = request.body || {};
+      const body = request.body || {};
+      const { plate, vehicle_type: vehicleType } = body;
       if (
         typeof plate !== "string" || !plate.trim() || plate.trim().length > 40 ||
         !VEHICLE_TYPES.includes(vehicleType)
       ) {
         return response.status(422).json({ detail: "Valid plate and vehicle type are required." });
       }
-      if (lotId !== undefined && lotId !== null && (!Number.isInteger(lotId) || !validateLot(lotId))) {
+      const reserveLotId = db.prepare("SELECT id FROM parking_lots WHERE name = '予備'").get()?.id;
+      const lotId = body.parking_lot_id ?? reserveLotId;
+      if (!Number.isInteger(lotId) || !validateLot(lotId)) {
         return response.status(422).json({ detail: "Unknown parking lot." });
       }
-      const hasX = Object.hasOwn(request.body, "position_x");
-      const hasY = Object.hasOwn(request.body, "position_y");
+      const hasX = Object.hasOwn(body, "position_x");
+      const hasY = Object.hasOwn(body, "position_y");
       if (hasX !== hasY) {
         return response.status(422).json({ detail: "Supply both position coordinates or neither." });
       }
       let position;
       if (hasX) {
-        const { position_x: x, position_y: y } = request.body;
+        const { position_x: x, position_y: y } = body;
         if (![x, y].every((value) => typeof value === "number" && value >= 0 && value <= 1)) {
           return response.status(422).json({ detail: "Vehicle coordinates must be between 0 and 1." });
         }
@@ -329,11 +330,7 @@ function createApplication(options = {}) {
       } else {
         position = getNextPosition(db, lotId);
       }
-      const section = request.body.board_section ?? "予備";
-      const options = request.body.options ?? [];
-      if (!BOARD_SECTIONS.includes(section)) {
-        return response.status(422).json({ detail: "Unknown board section." });
-      }
+      const options = body.options ?? [];
       if (!Array.isArray(options) || options.some((option) => !VEHICLE_OPTIONS.includes(option)) ||
           new Set(options).size !== options.length) {
         return response.status(422).json({ detail: "Invalid vehicle options." });
@@ -341,12 +338,12 @@ function createApplication(options = {}) {
       const result = db.prepare(`
         INSERT INTO vehicles
           (plate, vehicle_type, parking_lot_id, position_x, position_y,
-           unwashed, no_fuel, needs_repair, board_section, options)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           unwashed, no_fuel, needs_repair, options)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         plate.trim(), vehicleType.trim(), lotId ?? null, position.positionX, position.positionY,
-        Number(request.body.unwashed === true), Number(request.body.no_fuel === true),
-        Number(request.body.needs_repair === true), section, JSON.stringify(options),
+        Number(body.unwashed === true), Number(body.no_fuel === true),
+        Number(body.needs_repair === true), JSON.stringify(options),
       );
       realtime.notify();
       response.status(201).json(vehicleFromRow(db.prepare("SELECT * FROM vehicles WHERE id = ?").get(result.lastInsertRowid)));
@@ -364,7 +361,7 @@ function createApplication(options = {}) {
       if (vehicleId === null) return response.status(404).json({ detail: "Vehicle not found." });
       const allowed = new Set([
         "plate", "vehicle_type", "parking_lot_id", "position_x", "position_y",
-        "board_section", "options", ...STATUSES,
+        "options", ...STATUSES,
       ]);
       const entries = Object.entries(request.body || {});
       if (!entries.length) return response.status(422).json({ detail: "No vehicle fields supplied." });
@@ -382,9 +379,6 @@ function createApplication(options = {}) {
       if (Object.hasOwn(data, "vehicle_type") && !VEHICLE_TYPES.includes(data.vehicle_type)) {
         return response.status(422).json({ detail: "Unknown vehicle type." });
       }
-      if (Object.hasOwn(data, "board_section") && !BOARD_SECTIONS.includes(data.board_section)) {
-        return response.status(422).json({ detail: "Unknown board section." });
-      }
       if (Object.hasOwn(data, "options")) {
         if (!Array.isArray(data.options) || data.options.some((option) => !VEHICLE_OPTIONS.includes(option)) ||
             new Set(data.options).size !== data.options.length) {
@@ -398,8 +392,10 @@ function createApplication(options = {}) {
       ) {
         return response.status(422).json({ detail: "Vehicle coordinates must be between 0 and 1." });
       }
+      if (Object.hasOwn(data, "parking_lot_id") && data.parking_lot_id === null) {
+        data.parking_lot_id = db.prepare("SELECT id FROM parking_lots WHERE name = '予備'").get().id;
+      }
       if (Object.hasOwn(data, "parking_lot_id") &&
-          data.parking_lot_id !== null &&
           (!Number.isInteger(data.parking_lot_id) || !validateLot(data.parking_lot_id))) {
         return response.status(422).json({ detail: "Unknown parking lot." });
       }
@@ -463,7 +459,9 @@ function createApplication(options = {}) {
       }
       const existing = db.prepare("SELECT id FROM vehicles WHERE external_id = ?");
       const update = db.prepare(`
-        UPDATE vehicles SET plate = ?, vehicle_type = ?, parking_lot_id = ? WHERE external_id = ?
+        UPDATE vehicles
+        SET plate = ?, vehicle_type = ?, parking_lot_id = COALESCE(?, parking_lot_id)
+        WHERE external_id = ?
       `);
       const insert = db.prepare(`
         INSERT INTO vehicles
@@ -477,10 +475,12 @@ function createApplication(options = {}) {
           if (existing.get(externalId)) {
             update.run(vehicle.plate.trim(), vehicle.vehicle_type.trim(), vehicle.parking_lot_id ?? null, externalId);
           } else {
-            const position = getNextPosition(db, vehicle.parking_lot_id);
+            const reserveLotId = db.prepare("SELECT id FROM parking_lots WHERE name = '予備'").get().id;
+            const lotId = vehicle.parking_lot_id ?? reserveLotId;
+            const position = getNextPosition(db, lotId);
             insert.run(
               externalId, vehicle.plate.trim(), vehicle.vehicle_type.trim(),
-              vehicle.parking_lot_id ?? null, position.positionX, position.positionY,
+              lotId, position.positionX, position.positionY,
             );
           }
         }

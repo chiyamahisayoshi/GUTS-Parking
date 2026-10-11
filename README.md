@@ -1,8 +1,10 @@
 # Rental Car 车辆共享看板
 
-租车公司使用的共享看板，整个项目使用 JavaScript/Node.js 24 开发。包含“本店貸出中”“駅前店貸出中”“予備”三个停车场式分区，每个分区展示全部 9 个可调整大小、可拖动排序的停车场；车辆可在任意分区的任意停车场自由拖放。布局变化通过 SQLite 保存并实时同步到所有用户。系统另含按车型着色的车辆目录、洗车/加油/维修状态筛选，以及 ETC、车载器、禁烟/吸烟、导航和冬胎选项。新车默认放入“予備”的未配置区域。账号使用 scrypt 加盐密码哈希，不记录车辆移动审计历史；不生成虚构车牌，请登录后录入实际车辆或接 ERP。
+租车公司使用的共享看板，整个项目使用 JavaScript/Node.js 24 开发。13 个位置全部平级显示：駐車場 1–9、“本店貸出中”、“駅前店貸出中”、“予備”和“立駐”。每个位置都能独立调整尺寸和排序；车辆可以拖放到任何位置的任意坐标。新车无需选择位置，默认放入“予備”。布局和车辆变化通过 SQLite 保存并实时同步到所有用户。系统另含按车型着色的车辆目录、洗车/加油/维修状态筛选，以及 ETC、车载器、禁烟/吸烟、导航和冬胎选项。账号使用 scrypt 加盐密码哈希，不记录车辆移动审计历史；不生成虚构车牌，请登录后录入实际车辆或接 ERP。
 
-停车场卡片点“尺寸”后可用 `−` / `+` 调高度，用“宽/窄”切换列宽。拖动停车场标题可重新排序；移动设备可点“尺寸”后用左右箭头排序。停车场布局保存在服务端，所有登录用户看到相同布局。
+任意位置卡片点“尺寸”后可用 `−` / `+` 调高度，用“宽/窄”切换列宽。拖动卡片标题可重新排序；移动设备可点“尺寸”后用左右箭头排序。所有位置卡片处于同一网格，不存在门店分区与停车场的嵌套关系；位置布局保存在服务端，所有登录用户看到相同布局。
+
+从旧版升级时会自动建立四个新增位置，并把旧“本店貸出中”、“駅前店貸出中”、“予備”分区的车辆分别迁入同名位置；车辆坐标、状态和装备选项保留。旧分区内的停车场归属不再适用，因此这批车辆会按原分区归类，而不是按旧停车场号归类。数据库迁移幂等，不会删除车辆。
 
 ERP 后续可通过稳定的 `external_id` 和可选 API key 保护的同步接口接入；ERP 同步车辆基础资料不会覆盖看板维护的状态和位置。
 
@@ -59,7 +61,7 @@ chmod 600 /www/wwwroot/rentalcar-app/.env
 su -s /bin/sh www -c 'cd /www/wwwroot/rentalcar-app && /www/server/nodejs/v24.21.0/bin/node app/create-admin.js'
 ```
 
-按提示输入管理员用户名和密码。密码至少 12 个字符；输入时终端不显示字符是正常的。应用启动时会自动创建 SQLite 数据库和 9 个停车区域。再次运行最后一条管理员创建命令可添加其他账号。
+按提示输入管理员用户名和密码。密码至少 12 个字符；输入时终端不显示字符是正常的。应用启动时会自动创建 SQLite 数据库和 13 个平级位置。再次运行最后一条管理员创建命令可添加其他账号。
 
 ### 4. 用 PM2 启动应用
 
@@ -114,11 +116,15 @@ proxy_set_header Connection "upgrade";
 
 数据库在 `/www/wwwroot/rentalcar-data/rentalcar.db`，不在公开的网站目录内。用宝塔计划任务定期备份此目录，并把副本保存到 VPS 以外。
 
-更新前先备份。在宝塔终端运行：
+位置结构升级会自动迁移 SQLite 数据。先停止应用并备份数据库（保留好备份文件），再更新代码：
 
 ```bash
+su -s /bin/sh www -c 'export PATH=/www/server/nodejs/v24.21.0/bin:$PATH; export PM2_HOME=/www/wwwroot/rentalcar-data/.pm2; pm2 stop rentalcar'
+cp /www/wwwroot/rentalcar-data/rentalcar.db /www/wwwroot/rentalcar-data/rentalcar.db.before-location-migration-$(date +%Y%m%d-%H%M%S)
 su -s /bin/sh www -c 'export PATH=/www/server/nodejs/v24.21.0/bin:$PATH; export PM2_HOME=/www/wwwroot/rentalcar-data/.pm2; cd /www/wwwroot/rentalcar-app && git pull --ff-only && npm ci --omit=dev --cache /www/wwwroot/rentalcar-data/npm-cache && pm2 restart rentalcar'
 ```
+
+再次运行 `curl -I http://127.0.0.1:8000/` 确认返回 `200 OK`。迁移只重排车辆所在位置，不删除车辆；原有的分区车辆会进入同名独立位置，原有坐标和状态保留。
 
 当前单进程和 SQLite 适合单台 VPS 与约 250 台车。扩展到多进程/多服务器时，应改用共享数据库与消息通道。
 

@@ -75,7 +75,7 @@ test("keeps HTTPS asset upgrades enabled when secure cookies are configured", as
   }
 });
 
-test("logs in with hashed credentials and seeds the nine lots", async () => {
+test("logs in with hashed credentials and seeds thirteen peer locations", async () => {
   assert.equal((await agent.post("/api/login").send({
     username: "operator",
     password: "incorrect-password",
@@ -92,7 +92,12 @@ test("logs in with hashed credentials and seeds the nine lots", async () => {
   });
   const bootstrap = await agent.get("/api/bootstrap");
   assert.equal(bootstrap.status, 200);
-  assert.equal(bootstrap.body.parking_lots.length, 9);
+  assert.equal(bootstrap.body.parking_lots.length, 13);
+  assert.equal(Object.hasOwn(bootstrap.body, "board_sections"), false);
+  assert.deepEqual(
+    bootstrap.body.parking_lots.slice(9).map((lot) => lot.name),
+    ["本店貸出中", "駅前店貸出中", "予備", "立駐"],
+  );
   assert.deepEqual(bootstrap.body.vehicles, []);
 });
 
@@ -103,12 +108,11 @@ test("creates vehicles in separate positions and validates updates", async () =>
     parking_lot_id: 1,
     unwashed: true,
     options: ["ETC", "ナビ"],
-    board_section: "本店貸出中",
   });
   assert.equal(first.status, 201);
   assert.equal(first.body.unwashed, true);
   assert.deepEqual(first.body.options, ["ETC", "ナビ"]);
-  assert.equal(first.body.board_section, "本店貸出中");
+  assert.equal(Object.hasOwn(first.body, "board_section"), false);
   assert.deepEqual([first.body.position_x, first.body.position_y], [0.125, 0.0625]);
   vehicleId = first.body.id;
 
@@ -210,6 +214,27 @@ test("syncs ERP records idempotently while preserving board-managed status and p
     assert.equal(updated.plate, "品川 500 あ 2222");
     assert.equal(updated.unwashed, 1);
     assert.equal(updated.position_x, 0.8);
+
+    const withoutLocation = {
+      external_id: "fleet-vehicle-43",
+      plate: "品川 500 あ 3333",
+      vehicle_type: "B",
+    };
+    assert.deepEqual(
+      (await erpAgent.post("/api/integration/vehicles:sync").set(headers).send([withoutLocation])).body,
+      { synced: 1 },
+    );
+    const reserveLotId = appWithErp.db.prepare("SELECT id FROM parking_lots WHERE name = '予備'").get().id;
+    const defaultVehicle = appWithErp.db.prepare("SELECT * FROM vehicles WHERE external_id = ?")
+      .get(withoutLocation.external_id);
+    assert.equal(defaultVehicle.parking_lot_id, reserveLotId);
+    appWithErp.db.prepare("UPDATE vehicles SET parking_lot_id = 2 WHERE id = ?").run(defaultVehicle.id);
+    withoutLocation.plate = "品川 500 あ 4444";
+    await erpAgent.post("/api/integration/vehicles:sync").set(headers).send([withoutLocation]);
+    assert.equal(
+      appWithErp.db.prepare("SELECT parking_lot_id FROM vehicles WHERE id = ?").get(defaultVehicle.id).parking_lot_id,
+      2,
+    );
   } finally {
     appWithErp.db.close();
   }
@@ -234,28 +259,37 @@ test("deletes a vehicle and reports missing ids", async () => {
   }).set("Origin", "https://attacker.example")).status, 403);
 });
 
-test("creates new vehicles in the reserve page without assigning a parking lot", async () => {
+test("creates new vehicles in reserve and moves them between peer locations", async () => {
   const created = await agent.post("/api/vehicles").send({
     plate: "予備 100 あ 0001",
     vehicle_type: "A-1",
     options: ["禁煙", "スタッドレス"],
   });
   assert.equal(created.status, 201);
-  assert.equal(created.body.parking_lot_id, null);
-  assert.equal(created.body.board_section, "予備");
+  const locations = (await agent.get("/api/bootstrap")).body.parking_lots;
+  const reserve = locations.find((lot) => lot.name === "予備");
+  assert.equal(created.body.parking_lot_id, reserve.id);
+  assert.equal(Object.hasOwn(created.body, "board_section"), false);
   assert.deepEqual(created.body.options, ["禁煙", "スタッドレス"]);
   const moved = await agent.patch(`/api/vehicles/${created.body.id}`).send({
-    board_section: "駅前店貸出中",
-    parking_lot_id: 3,
+    parking_lot_id: locations.find((lot) => lot.name === "駅前店貸出中").id,
     position_x: 0.37,
     position_y: 0.62,
     options: ["ETC"],
   });
   assert.equal(moved.status, 200);
-  assert.equal(moved.body.board_section, "駅前店貸出中");
-  assert.equal(moved.body.parking_lot_id, 3);
+  assert.equal(moved.body.parking_lot_id, locations.find((lot) => lot.name === "駅前店貸出中").id);
   assert.deepEqual([moved.body.position_x, moved.body.position_y], [0.37, 0.62]);
   assert.deepEqual(moved.body.options, ["ETC"]);
+  for (const location of locations) {
+    const placed = await agent.patch(`/api/vehicles/${created.body.id}`).send({
+      parking_lot_id: location.id,
+      position_x: 0.25,
+      position_y: 0.75,
+    });
+    assert.equal(placed.status, 200, `vehicle should move to ${location.name}`);
+    assert.equal(placed.body.parking_lot_id, location.id);
+  }
   assert.deepEqual(
     (await agent.get("/api/bootstrap")).body.vehicle_types,
     ["A-1", "A-2", "A-2P", "B", "B軽トラ", "C-1", "C-2", "D", "H-1", "H-2", "その他"],
@@ -264,7 +298,7 @@ test("creates new vehicles in the reserve page without assigning a parking lot",
 
 test("persists parking lot size and order and rejects invalid layouts", async () => {
   const initialLots = (await agent.get("/api/bootstrap")).body.parking_lots;
-  assert.equal(initialLots.length, 9);
+  assert.equal(initialLots.length, 13);
   assert.deepEqual(
     [initialLots[0].display_order, initialLots[0].area_height, initialLots[0].area_width],
     [0, 210, 1],
@@ -279,23 +313,26 @@ test("persists parking lot size and order and rejects invalid layouts", async ()
   assert.equal((await agent.patch("/api/parking-lots/4").send({ area_width: 3 })).status, 422);
   assert.equal((await agent.put("/api/parking-lots/order").send({ ids: [1, 2] })).status, 422);
   const reordered = await agent.put("/api/parking-lots/order").send({
-    ids: [4, 1, 2, 3, 5, 6, 7, 8, 9],
+    ids: [4, ...initialLots.filter((lot) => lot.id !== 4).map((lot) => lot.id)],
   });
   assert.equal(reordered.status, 200);
   assert.deepEqual(
     (await agent.get("/api/bootstrap")).body.parking_lots.map((lot) => lot.id),
-    [4, 1, 2, 3, 5, 6, 7, 8, 9],
+    [4, ...initialLots.filter((lot) => lot.id !== 4).map((lot) => lot.id)],
   );
 });
 
-test("migrates existing vehicle records into the new model and reserve page", () => {
+test("flattens previous board sections into peer locations without losing vehicle data", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rentalcar-migration-"));
   const databasePath = path.join(directory, "legacy.db");
   const legacy = new DatabaseSync(databasePath);
   legacy.exec(`
     CREATE TABLE parking_lots (
       id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE
+      name TEXT NOT NULL UNIQUE,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      area_height INTEGER NOT NULL DEFAULT 210,
+      area_width INTEGER NOT NULL DEFAULT 1
     );
     CREATE TABLE vehicles (
       id INTEGER PRIMARY KEY,
@@ -307,19 +344,33 @@ test("migrates existing vehicle records into the new model and reserve page", ()
       position_y REAL NOT NULL DEFAULT 0.5,
       unwashed INTEGER NOT NULL DEFAULT 0,
       no_fuel INTEGER NOT NULL DEFAULT 0,
-      needs_repair INTEGER NOT NULL DEFAULT 0
+      needs_repair INTEGER NOT NULL DEFAULT 0,
+      board_section TEXT NOT NULL DEFAULT '予備',
+      options TEXT NOT NULL DEFAULT '[]'
     )
   `);
-  const legacyLot = legacy.prepare("INSERT INTO parking_lots (name) VALUES (?)");
-  for (let index = 1; index <= 9; index += 1) legacyLot.run(`駐車場 ${index}`);
-  legacy.prepare("INSERT INTO vehicles (plate, vehicle_type) VALUES (?, ?)").run("旧データ", "hybrid");
+  for (let index = 1; index <= 9; index += 1) {
+    legacy.prepare("INSERT INTO parking_lots (name, display_order) VALUES (?, ?)").run(`駐車場 ${index}`, index - 1);
+  }
+  legacy.prepare(`
+    INSERT INTO vehicles
+      (plate, vehicle_type, parking_lot_id, position_x, position_y, unwashed, no_fuel,
+       needs_repair, board_section, options)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run("旧データ", "hybrid", 4, 0.37, 0.62, 1, 0, 1, "駅前店貸出中", '["ETC"]');
   legacy.close();
   try {
     const migrated = require("../app/db").openDatabase(databasePath);
     const vehicle = migrated.prepare("SELECT * FROM vehicles WHERE plate = ?").get("旧データ");
     assert.equal(vehicle.vehicle_type, "A-2");
-    assert.equal(vehicle.board_section, "予備");
-    assert.deepEqual(JSON.parse(vehicle.options), []);
+    assert.equal(vehicle.board_section, "駅前店貸出中");
+    assert.equal(
+      vehicle.parking_lot_id,
+      migrated.prepare("SELECT id FROM parking_lots WHERE name = '駅前店貸出中'").get().id,
+    );
+    assert.deepEqual([vehicle.position_x, vehicle.position_y, vehicle.unwashed, vehicle.needs_repair], [0.37, 0.62, 1, 1]);
+    assert.deepEqual(JSON.parse(vehicle.options), ["ETC"]);
+    assert.equal(migrated.prepare("SELECT COUNT(*) AS count FROM parking_lots").get().count, 13);
     const lot = migrated.prepare("SELECT * FROM parking_lots WHERE id = 4").get();
     assert.deepEqual([lot.display_order, lot.area_height, lot.area_width], [3, 210, 1]);
     migrated.close();
