@@ -1,5 +1,7 @@
 const readline = require("node:readline/promises");
 const { stdin, stdout } = require("node:process");
+const path = require("node:path");
+require("dotenv").config({ path: path.resolve(__dirname, "..", ".env") });
 const { openDatabase } = require("./db");
 const { hashPassword } = require("./security");
 
