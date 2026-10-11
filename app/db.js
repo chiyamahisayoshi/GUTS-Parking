@@ -30,7 +30,7 @@ function openDatabase(databasePath) {
       name TEXT NOT NULL UNIQUE,
       display_order INTEGER NOT NULL DEFAULT 0,
       area_height INTEGER NOT NULL DEFAULT 210,
-      area_width INTEGER NOT NULL DEFAULT 1
+      area_width INTEGER NOT NULL DEFAULT 50
     );
     CREATE TABLE IF NOT EXISTS vehicles (
       id INTEGER PRIMARY KEY,
@@ -68,7 +68,7 @@ function openDatabase(databasePath) {
     db.exec("ALTER TABLE parking_lots ADD COLUMN area_height INTEGER NOT NULL DEFAULT 210");
   }
   if (!lotColumns.has("area_width")) {
-    db.exec("ALTER TABLE parking_lots ADD COLUMN area_width INTEGER NOT NULL DEFAULT 1");
+    db.exec("ALTER TABLE parking_lots ADD COLUMN area_width INTEGER NOT NULL DEFAULT 50");
   }
   if (!columns.has("options")) {
     db.exec("ALTER TABLE vehicles ADD COLUMN options TEXT NOT NULL DEFAULT '[]'");
@@ -88,6 +88,11 @@ function openDatabase(databasePath) {
   db.exec("BEGIN IMMEDIATE");
   try {
     LOT_NAMES.forEach((name, index) => addLot.run(name, index));
+    const widthMigration = "parking-lot-width-percent-v1";
+    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE name = ?").get(widthMigration)) {
+      db.exec("UPDATE parking_lots SET area_width = CASE area_width WHEN 1 THEN 50 WHEN 2 THEN 100 ELSE area_width END");
+      db.prepare("INSERT INTO schema_migrations (name) VALUES (?)").run(widthMigration);
+    }
     const migration = "flatten-board-sections-into-locations";
     if (columns.has("board_section") &&
         !db.prepare("SELECT 1 FROM schema_migrations WHERE name = ?").get(migration)) {

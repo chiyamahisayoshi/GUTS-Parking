@@ -32,6 +32,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .quiet-button, .filter-button { background: #fff; border: 1px solid var(--border); color: #53657b; padding: 9px 13px; border-radius: 9px; }
 .page-content { max-width: 1600px; margin: auto; padding: 32px clamp(16px, 3vw, 44px) 60px; }
 .page-heading, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.page-actions { display: flex; flex: none; align-items: center; gap: 9px; }
 .page-heading h1, .section-heading h2 { margin: 3px 0 7px; font-size: 25px; letter-spacing: -.5px; }
 .page-heading .muted, .muted { color: var(--muted); font-size: 13px; margin: 0; }
 .eyebrow { font-size: 10px; font-weight: 750; color: #16828b; letter-spacing: 1.5px; margin: 0; }
@@ -42,9 +43,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .summary-card span { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
 .summary-card b { font-size: 20px; }
 .board-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 330px; align-items: start; gap: 16px; }
-.parking-grid { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row dense; align-content: start; gap: 14px; }
-.lot-card { min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 13px; overflow: hidden; box-shadow: 0 2px 7px #172b4d08; }
-.lot-card.lot-wide { grid-column: span 2; }
+.parking-grid { min-width: 0; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 14px; }
+.lot-card { flex: 0 0 clamp(180px, calc(var(--lot-width, 50%) - 7px), 100%); min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 13px; overflow: hidden; box-shadow: 0 2px 7px #172b4d08; }
+.lot-card.resizing { z-index: 2; box-shadow: 0 5px 20px #172b4d24; }
 .lot-heading { min-height: 48px; padding: 6px 10px 6px 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid #edf0f4; cursor: grab; }
 .lot-heading:active { cursor: grabbing; }
 .lot-card.reordering { opacity: .5; }
@@ -54,9 +55,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .lot-controls { display: flex; align-items: center; gap: 4px; }
 .lot-control { border: 1px solid var(--border); background: #fff; color: #53657b; border-radius: 6px; min-width: 30px; height: 28px; font-size: 10px; }
 .lot-control:hover { border-color: #8ecfd1; color: var(--teal); }
-.size-control { display: none; }
-.lot-card.size-editing .size-control { display: inline-block; }
+.layout-control { display: none; }
+.lot-card.size-editing .layout-control { display: inline-block; }
 .lot-area { min-height: 160px; position: relative; overflow: hidden; background-color: #f8fafb; background-image: linear-gradient(90deg, transparent 49.5%, #e9eff2 50%, transparent 50.5%), linear-gradient(0deg, transparent 49.5%, #e9eff2 50%, transparent 50.5%); background-size: 44px 44px; touch-action: none; }
+.lot-resize-handle { display: none; position: absolute; z-index: 2; right: 2px; bottom: 2px; width: 26px; height: 26px; border: 0; border-radius: 5px; background: #087e8b; color: #fff; font-size: 15px; line-height: 1; cursor: nwse-resize; touch-action: none; }
+.lot-card.size-editing .lot-resize-handle { display: grid; place-items: center; }
 .lot-area.drop-target { background-color: #e9f8f2; outline: 2px solid #69c89e; outline-offset: -3px; }
 .lot-area:before { content: ""; position: absolute; inset: 9px; border: 1px dashed #d8e1e6; border-radius: 8px; pointer-events: none; }
 .lot-area.empty:after { content: "車両をここへ移動"; position: absolute; inset: 0; display: grid; place-items: center; color: #aab5c2; font-size: 11px; pointer-events: none; }
@@ -122,6 +125,15 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
 .dialog-actions > span { flex: 1; }
 .danger-button { border: 1px solid #f0cbc8; border-radius: 8px; background: #fff; color: #a63e36; padding: 9px 12px; }
 .dialog-actions .quiet-button, .dialog-actions .primary-button { padding: 10px 13px; }
+.location-form { padding: 24px; width: min(100%, 620px); }
+.location-form > .muted { line-height: 1.6; margin: 8px 0 16px; }
+.location-list { display: grid; gap: 8px; max-height: min(50vh, 430px); overflow: auto; padding: 2px; }
+.location-row { display: flex; align-items: center; gap: 8px; }
+.location-row input, .add-location-form input { min-width: 0; flex: 1; border: 1px solid #d9e2e9; border-radius: 8px; padding: 9px 11px; color: var(--ink); }
+.location-row .quiet-button { flex: none; padding: 9px 10px; font-size: 11px; }
+.add-location-form { display: flex; align-items: flex-end; gap: 8px; padding-top: 15px; border-top: 1px solid #edf0f4; }
+.add-location-form label { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 6px; color: #44566f; font-size: 12px; font-weight: 650; }
+.add-location-form .primary-button { flex: none; padding: 10px 12px; }
 
 @media (max-width: 1100px) {
   .board-workspace { grid-template-columns: 1fr; }
@@ -129,7 +141,6 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
   .vehicle-catalog-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 800px) {
-  .parking-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .summary-row { grid-template-columns: repeat(3, minmax(75px, 1fr)); }
   .status-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .page-content { padding-top: 24px; }
@@ -145,6 +156,7 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
   .connection { font-size: 10px; }
   .page-content { padding: 22px 13px 40px; }
   .page-heading { align-items: flex-start; }
+  .page-actions { flex-direction: column-reverse; align-items: stretch; }
   .page-heading h1 { font-size: 21px; }
   .page-heading .muted { font-size: 11px; line-height: 1.6; max-width: 255px; }
   .page-heading .primary-button { white-space: nowrap; padding: 10px; font-size: 11px; }
@@ -152,14 +164,18 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
   .summary-card { padding: 10px; min-height: 58px; }
   .summary-card span { font-size: 10px; }
   .summary-card b { font-size: 18px; }
-  .parking-grid { grid-template-columns: 1fr; gap: 10px; }
-  .lot-card.lot-wide { grid-column: auto; }
+  .parking-grid { gap: 10px; }
+  .lot-card { flex-basis: clamp(180px, calc(var(--lot-width, 50%) - 5px), 100%); }
   .lot-area { min-height: 210px; }
   .vehicle-catalog-list { grid-template-columns: 1fr; }
   .status-section { margin-top: 29px; }
   .status-list { grid-template-columns: 1fr; }
   .form-row { grid-template-columns: 1fr; gap: 0; }
   .vehicle-form { padding: 20px; }
+  .location-form { padding: 20px; }
+  .location-row { gap: 5px; }
+  .location-row .quiet-button { padding: 8px 7px; }
+  .add-location-form { align-items: stretch; flex-direction: column; }
   .status-fields, .option-fields { gap: 12px; }
   .dialog-actions { flex-wrap: wrap; }
   .dialog-actions > span { flex-basis: 100%; height: 0; }

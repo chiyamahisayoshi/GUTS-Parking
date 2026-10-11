@@ -301,16 +301,17 @@ test("persists parking lot size and order and rejects invalid layouts", async ()
   assert.equal(initialLots.length, 13);
   assert.deepEqual(
     [initialLots[0].display_order, initialLots[0].area_height, initialLots[0].area_width],
-    [0, 210, 1],
+    [0, 210, 50],
   );
   const resized = await agent.patch("/api/parking-lots/4").send({
     area_height: 370,
-    area_width: 2,
+    area_width: 73,
   });
   assert.equal(resized.status, 200);
-  assert.deepEqual([resized.body.area_height, resized.body.area_width], [370, 2]);
+  assert.deepEqual([resized.body.area_height, resized.body.area_width], [370, 73]);
   assert.equal((await agent.patch("/api/parking-lots/4").send({ area_height: 900 })).status, 422);
-  assert.equal((await agent.patch("/api/parking-lots/4").send({ area_width: 3 })).status, 422);
+  assert.equal((await agent.patch("/api/parking-lots/4").send({ area_width: 101 })).status, 422);
+  assert.equal((await agent.patch("/api/parking-lots/4").send({ area_width: 29 })).status, 422);
   assert.equal((await agent.put("/api/parking-lots/order").send({ ids: [1, 2] })).status, 422);
   const reordered = await agent.put("/api/parking-lots/order").send({
     ids: [4, ...initialLots.filter((lot) => lot.id !== 4).map((lot) => lot.id)],
@@ -320,6 +321,35 @@ test("persists parking lot size and order and rejects invalid layouts", async ()
     (await agent.get("/api/bootstrap")).body.parking_lots.map((lot) => lot.id),
     [4, ...initialLots.filter((lot) => lot.id !== 4).map((lot) => lot.id)],
   );
+});
+
+test("adds locations and renames them without moving their vehicles", async () => {
+  const created = await agent.post("/api/parking-lots").send({ name: "洗車待ち" });
+  assert.equal(created.status, 201);
+  assert.deepEqual(
+    [created.body.name, created.body.display_order, created.body.area_height, created.body.area_width],
+    ["洗車待ち", 13, 210, 50],
+  );
+  assert.equal((await agent.post("/api/parking-lots").send({ name: "洗車待ち" })).status, 409);
+  assert.equal((await agent.post("/api/parking-lots").send({ name: "   " })).status, 422);
+  assert.equal((await agent.post("/api/parking-lots").send({ name: "x".repeat(41) })).status, 422);
+  const vehicle = await agent.post("/api/vehicles").send({
+    plate: "位置変更 100 あ 0001",
+    vehicle_type: "A-1",
+    parking_lot_id: created.body.id,
+  });
+  assert.equal(vehicle.status, 201);
+  const renamed = await agent.patch(`/api/parking-lots/${created.body.id}`).send({ name: "洗車エリア" });
+  assert.equal(renamed.status, 200);
+  assert.equal(renamed.body.name, "洗車エリア");
+  assert.equal((await agent.patch(`/api/parking-lots/${created.body.id}`).send({ name: "駐車場 1" })).status, 409);
+  const bootstrap = await agent.get("/api/bootstrap");
+  assert.equal(bootstrap.body.parking_lots.find((lot) => lot.id === created.body.id).name, "洗車エリア");
+  assert.equal(
+    bootstrap.body.vehicles.find((entry) => entry.id === vehicle.body.id).parking_lot_id,
+    created.body.id,
+  );
+  assert.equal((await request(server).post("/api/parking-lots").send({ name: "認証なし" })).status, 401);
 });
 
 test("flattens previous board sections into peer locations without losing vehicle data", () => {
@@ -352,6 +382,7 @@ test("flattens previous board sections into peer locations without losing vehicl
   for (let index = 1; index <= 9; index += 1) {
     legacy.prepare("INSERT INTO parking_lots (name, display_order) VALUES (?, ?)").run(`駐車場 ${index}`, index - 1);
   }
+  legacy.prepare("UPDATE parking_lots SET area_width = 2 WHERE id = 7").run();
   legacy.prepare(`
     INSERT INTO vehicles
       (plate, vehicle_type, parking_lot_id, position_x, position_y, unwashed, no_fuel,
@@ -372,7 +403,8 @@ test("flattens previous board sections into peer locations without losing vehicl
     assert.deepEqual(JSON.parse(vehicle.options), ["ETC"]);
     assert.equal(migrated.prepare("SELECT COUNT(*) AS count FROM parking_lots").get().count, 13);
     const lot = migrated.prepare("SELECT * FROM parking_lots WHERE id = 4").get();
-    assert.deepEqual([lot.display_order, lot.area_height, lot.area_width], [3, 210, 1]);
+    assert.deepEqual([lot.display_order, lot.area_height, lot.area_width], [3, 210, 50]);
+    assert.equal(migrated.prepare("SELECT area_width FROM parking_lots WHERE id = 7").get().area_width, 100);
     migrated.close();
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
