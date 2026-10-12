@@ -410,6 +410,11 @@ function openDatabase(databasePath) {
       db.exec(`ALTER TABLE vehicle_damage_marks ADD COLUMN ${column} REAL`);
     }
   }
+  for (const column of ["world_nx", "world_ny", "world_nz"]) {
+    if (!damageMarkColumns.has(column)) {
+      db.exec(`ALTER TABLE vehicle_damage_marks ADD COLUMN ${column} REAL`);
+    }
+  }
   for (const tenant of db.prepare("SELECT id FROM tenants").all()) {
     seedTenantVehicleOptions(db, tenant.id);
   }

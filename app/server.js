@@ -190,7 +190,7 @@ function vehicleResponse(db, row) {
   ).all(row.id).map((entry) => [entry.field_id, entry.value]));
   vehicle.inspection_marks = db.prepare(`
     SELECT m.id, m.damage_type_id, m.x, m.y, m.world_x, m.world_y, m.world_z,
-           t.name, t.icon, t.color
+           m.world_nx, m.world_ny, m.world_nz, t.name, t.icon, t.color, t.built_in_key
     FROM vehicle_damage_marks m
     JOIN vehicle_damage_types t ON t.id = m.damage_type_id
     WHERE m.vehicle_id = ? ORDER BY m.rowid
@@ -250,6 +250,10 @@ function inspectionMarksAreValid(db, marks, tenantId) {
           !["world_x", "world_y", "world_z"].every((key) =>
             typeof mark[key] === "number" && Number.isFinite(mark[key]) &&
             mark[key] >= -3 && mark[key] <= 3)) ||
+        (["world_nx", "world_ny", "world_nz"].some((key) => Object.hasOwn(mark, key)) &&
+          !["world_nx", "world_ny", "world_nz"].every((key) =>
+            typeof mark[key] === "number" && Number.isFinite(mark[key]) &&
+            mark[key] >= -1 && mark[key] <= 1)) ||
         !db.prepare("SELECT 1 FROM vehicle_damage_types WHERE id = ? AND tenant_id = ?")
           .get(mark.damage_type_id, tenantId)) return false;
     ids.add(mark.id);
@@ -272,13 +276,14 @@ function saveInspectionData(db, vehicleId, values, marks) {
     db.prepare("DELETE FROM vehicle_damage_marks WHERE vehicle_id = ?").run(vehicleId);
     const saveMark = db.prepare(`
       INSERT INTO vehicle_damage_marks
-        (id, vehicle_id, damage_type_id, x, y, world_x, world_y, world_z)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (id, vehicle_id, damage_type_id, x, y, world_x, world_y, world_z, world_nx, world_ny, world_nz)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     for (const mark of marks) {
       saveMark.run(
         mark.id, vehicleId, mark.damage_type_id, mark.x, mark.y,
         mark.world_x ?? null, mark.world_y ?? null, mark.world_z ?? null,
+        mark.world_nx ?? null, mark.world_ny ?? null, mark.world_nz ?? null,
       );
     }
   }
@@ -396,6 +401,29 @@ function createApplication(options = {}) {
       return response.status(403).json({ detail: "Cross-origin request rejected." });
     }
     next();
+  }
+
+  function saveParkingLotMarkings(request, response, next) {
+    try {
+      const lotId = parseVehicleId(request.params.id);
+      const lot = lotId === null ? null : db.prepare(
+        "SELECT id FROM parking_lots WHERE id = ? AND tenant_id = ?",
+      ).get(lotId, request.tenantId);
+      if (!lot) return response.status(404).json({ detail: "Parking lot not found." });
+      const body = request.body || {};
+      if (Object.keys(body).length !== 1 || !Object.hasOwn(body, "markings") ||
+          !validateMarkings(body.markings)) {
+        return response.status(422).json({
+          detail: "線は最大100本までで、色と座標を正しく指定してください。",
+        });
+      }
+      db.prepare("UPDATE parking_lots SET markings = ? WHERE id = ? AND tenant_id = ?")
+        .run(JSON.stringify(body.markings), lotId, request.tenantId);
+      realtime.notify(request.tenantId);
+      response.json({ markings: body.markings });
+    } catch (error) {
+      next(error);
+    }
   }
 
   function validateLot(lotId, tenantId) {
@@ -527,8 +555,8 @@ function createApplication(options = {}) {
     const inspectionMarks = new Map();
     for (const mark of db.prepare(`
       SELECT m.id, m.vehicle_id, m.damage_type_id, m.x, m.y,
-             m.world_x, m.world_y, m.world_z,
-             t.name, t.icon, t.color
+             m.world_x, m.world_y, m.world_z, m.world_nx, m.world_ny, m.world_nz,
+             t.name, t.icon, t.color, t.built_in_key
       FROM vehicle_damage_marks m
       JOIN vehicles v ON v.id = m.vehicle_id
       JOIN vehicle_damage_types t ON t.id = m.damage_type_id
@@ -801,6 +829,14 @@ function createApplication(options = {}) {
       next(error);
     }
   });
+
+  app.post(
+    "/api/parking-lots/:id/markings",
+    requireUser,
+    requireAdmin,
+    requireSameOrigin,
+    saveParkingLotMarkings,
+  );
 
   app.delete("/api/parking-lots/:id", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
     const lotId = parseVehicleId(request.params.id);
