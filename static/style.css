@@ -221,6 +221,28 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
 .status-form > .muted { line-height: 1.6; margin: 8px 0 16px; }
 .status-manager-list { display: grid; gap: 8px; max-height: min(45vh, 360px); overflow: auto; padding: 2px; }
 .status-manager-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; }
+.job-section { margin-top: 0; }
+.job-list { display: grid; gap: 8px; max-height: 360px; overflow: auto; }
+.job-row { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; background: #fff; transition: opacity .2s; }
+.job-row.completed { opacity: .45; }
+.job-row input[type="checkbox"] { width: 20px; height: 20px; flex: none; }
+.job-text { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; flex: 1; font-size: 13px; }
+.job-cell-0 { font-variant-numeric: tabular-nums; font-weight: 700; }
+.job-cell-1 { font-weight: 700; }
+.job-cell-4 { color: #5c6f87; }
+.job-row .danger-button { flex: none; padding: 7px 10px; font-size: 11px; }
+.add-job-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: end; padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid #edf0f4; }
+.add-job-form label { display: grid; gap: 6px; min-width: 0; color: #44566f; font-size: 12px; font-weight: 650; }
+.add-job-form input, .add-job-form select { width: 100%; min-width: 0; border: 1px solid #d9e2e9; border-radius: 8px; padding: 9px 11px; color: var(--ink); background: #fff; }
+.job-plate-field { position: relative; }
+.job-suggestions { position: absolute; top: 100%; left: 0; right: 0; z-index: 5; display: grid; background: #fff; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 30px #101d2b33; overflow: hidden; }
+.job-suggestions[hidden] { display: none; }
+.job-suggestions button { border: 0; border-bottom: 1px solid #edf0f4; background: #fff; padding: 10px 11px; text-align: left; font-size: 13px; }
+.job-suggestions button:hover { background: #eef5fb; }
+.job-readonly { display: grid; gap: 4px; font-size: 12px; color: #44566f; }
+.job-readonly b { font-size: 14px; color: var(--ink); }
+.job-arrow { font-weight: 800; color: #5c6f87; text-align: center; padding-bottom: 10px; }
+.add-job-form .primary-button { grid-column: 1 / -1; }
 .status-manager-row > span { min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
 .status-manager-row .danger-button { flex: none; padding: 7px 10px; font-size: 11px; }
 .add-status-form { display: grid; grid-template-columns: minmax(0, 1fr) 100px auto; align-items: flex-end; gap: 8px; padding-top: 15px; border-top: 1px solid #edf0f4; }
@@ -296,6 +318,8 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
   .location-row .primary-button, .location-row .danger-button { padding: 8px 9px; font-size: 11px; }
   .add-location-form { grid-template-columns: 1fr; align-items: stretch; }
   .add-status-form { grid-template-columns: minmax(0, 1fr) 90px; }
+  .add-job-form { grid-template-columns: 1fr; }
+  .job-arrow { text-align: left; padding-bottom: 0; }
   .add-status-form .primary-button { grid-column: 1 / -1; }
   .assessment-section-heading { align-items: flex-start; flex-direction: column; }
   .assessment-field-grid { grid-template-columns: 1fr; }

@@ -63,6 +63,18 @@
           </div>
         </details>
       </section>
+      <section class="status-section job-section">
+        <details id="job-panel" open>
+          <summary class="status-summary">
+            <span><p class="eyebrow">DISPATCH</p><strong>ジョブ</strong></span>
+            <span class="status-summary-actions"><span id="job-total" class="muted"></span><span class="status-toggle-icon" aria-hidden="true">⌄</span></span>
+          </summary>
+          <div class="status-panel-content">
+            <div class="status-toolbar"><button type="button" id="manage-jobs-button" class="primary-button">＋ ジョブ管理</button></div>
+            <div id="job-list" class="job-list"></div>
+          </div>
+        </details>
+      </section>
       <div class="board-workspace">
         <section id="parking-grid" class="parking-grid" aria-label="駐車場・貸出場所"></section>
         <aside class="vehicle-catalog" aria-labelledby="catalog-title">
@@ -160,6 +172,34 @@
         <button type="submit" class="primary-button">項目を追加</button>
       </form>
       <p id="status-error" class="error-message" role="alert"></p>
+    </div>
+  </dialog>
+  <dialog id="job-dialog">
+    <div class="status-form">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">DISPATCH SETTINGS</p><h2>ジョブ管理</h2></div>
+        <button type="button" id="close-job-dialog" class="close-button" aria-label="閉じる">×</button>
+      </div>
+      <form id="add-job-form" class="add-job-form" autocomplete="off">
+        <label>日時（貼り付け可）
+          <input name="scheduled_at" id="job-time-text" required placeholder="2026/10/13 10:30" inputmode="numeric">
+          <input type="datetime-local" id="job-time-picker" aria-label="日時を選択">
+        </label>
+        <label class="job-plate-field">車両ナンバー
+          <input name="plate" id="job-plate" required placeholder="例：1234" inputmode="numeric">
+          <div id="job-suggestions" class="job-suggestions" hidden></div>
+        </label>
+        <div class="job-readonly"><span>クラス</span><b id="job-class">—</b></div>
+        <div class="job-readonly"><span>現在位置</span><b id="job-location">—</b></div>
+        <div class="job-arrow" aria-hidden="true">を→</div>
+        <label>送り先
+          <select name="destination_lot_id" id="job-destination" required></select>
+        </label>
+        <button type="submit" class="primary-button">ジョブを追加</button>
+      </form>
+      <p class="muted">完了したジョブは毎日0時に自動削除されます。未完了のジョブは下の一覧から手動で削除するまで残ります。</p>
+      <div id="job-manager-list" class="status-manager-list"></div>
+      <p id="job-error" class="error-message" role="alert"></p>
     </div>
   </dialog>
   <dialog id="option-dialog">

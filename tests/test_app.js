@@ -1194,3 +1194,40 @@ test("flattens previous board sections into peer locations without losing vehicl
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("manages dispatch jobs: ordering, completion, isolation, validation and midnight purge", async () => {
+  const bootstrap = (await agent.get("/api/bootstrap")).body;
+  const [, lotB] = bootstrap.parking_lots;
+  const vehicle = (await agent.post("/api/vehicles").send({ plate: "1234", vehicle_type: "A-1" })).body;
+  const create = (scheduled, extra = {}) => agent.post("/api/jobs").send({
+    scheduled_at: scheduled, vehicle_id: vehicle.id, destination_lot_id: lotB.id, ...extra,
+  });
+
+  const late = await create("2026/10/13 15:30");
+  const early = await create("2026/10/13 09：05");
+  assert.equal(late.status, 201);
+  assert.equal(early.status, 201);
+  assert.equal((await create("not a date")).status, 422);
+  assert.equal((await create("2026/02/30 10:00")).status, 422);
+  assert.equal((await create("2026/10/13 10:00", { destination_lot_id: 999999 })).status, 422);
+  assert.equal((await request(server).post("/api/jobs").send({})).status, 401);
+  assert.equal((await create("2026/10/13 10:00").set("Origin", "https://attacker.example")).status, 403);
+
+  let jobs = (await agent.get("/api/bootstrap")).body.jobs;
+  assert.deepEqual(jobs.map((job) => job.scheduled_at), ["2026-10-13 09:05", "2026-10-13 15:30"]);
+
+  const done = await agent.patch(`/api/jobs/${early.body.id}`).send({ completed: true });
+  assert.equal(done.status, 200);
+  jobs = (await agent.get("/api/bootstrap")).body.jobs;
+  assert.deepEqual(jobs.map((job) => job.id), [late.body.id, early.body.id]);
+  assert.equal((await agent.patch(`/api/jobs/${early.body.id}`).send({ completed: "yes" })).status, 422);
+
+  assert.equal(application.purgeJobs(), 0);
+  const tomorrow = new Date(Date.now() + 36 * 60 * 60 * 1000);
+  assert.equal(application.purgeJobs(tomorrow), 1);
+  jobs = (await agent.get("/api/bootstrap")).body.jobs;
+  assert.deepEqual(jobs.map((job) => job.id), [late.body.id]);
+
+  assert.equal((await agent.delete(`/api/jobs/${late.body.id}`)).status, 204);
+  assert.equal((await agent.delete(`/api/jobs/${late.body.id}`)).status, 404);
+});
