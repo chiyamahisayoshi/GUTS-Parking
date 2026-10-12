@@ -37,7 +37,7 @@ ERP 后续可通过稳定的 `external_id` 和可选 API key 保护的同步接�
 以下命令假设 Node 版本管理器安装路径为 `/www/server/nodejs/v24.21.0`，应用运行用户为宝塔常见的 `www`。如果实际安装路径或用户不同，请替换为面板显示的值。PR 合并后从 `main` 获取代码：
 
 ```bash
-git clone https://github.com/chiyamahisayoshi/rentalcar.git /www/wwwroot/rentalcar-app
+git clone https://github.com/chiyamahisayoshi/guts.git /www/wwwroot/rentalcar-app
 mkdir -p /www/wwwroot/rentalcar-data
 chown -R www:www /www/wwwroot/rentalcar-app /www/wwwroot/rentalcar-data
 chmod 750 /www/wwwroot/rentalcar-data
@@ -46,7 +46,7 @@ chmod 750 /www/wwwroot/rentalcar-data
 PR 尚未合并到 `main`、需要测试当前 PR 时，用下面命令代替上面的 `git clone` 命令：
 
 ```bash
-git clone --branch chiyamahisayoshi-rentalcar-live-board --single-branch https://github.com/chiyamahisayoshi/rentalcar.git /www/wwwroot/rentalcar-app
+git clone --branch chiyamahisayoshi-rentalcar-live-board --single-branch https://github.com/chiyamahisayoshi/guts.git /www/wwwroot/rentalcar-app
 ```
 
 以 `www` 用户安装依赖，并使用独立 npm 缓存目录，避免 root 与 `www` 混用 npm 后产生缓存权限错误：
