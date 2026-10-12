@@ -24,6 +24,11 @@
   let socket;
   let dragged = null;
   let resizing = null;
+  let editingLotId = null;
+  let drawingLotId = null;
+  let selectedMarking = null;
+  let markingError = "";
+  const markingColors = new Map();
   let suppressClick = false;
 
   async function api(path, options = {}) {
@@ -69,7 +74,7 @@
   }
 
   async function loadBoard() {
-    if (dragged || resizing) return;
+    if (dragged || resizing || draftMarking) return;
     const data = await api("/api/bootstrap");
     lots = data.parking_lots;
     vehicles = data.vehicles;
@@ -166,21 +171,115 @@
       resize.textContent = "サイズ調整";
       resize.title = "クリック後、右下のハンドルをドラッグしてサイズを調整";
       resize.addEventListener("click", () => {
-        card.classList.toggle("size-editing");
-        resize.textContent = card.classList.contains("size-editing") ? "完了" : "サイズ調整";
+        editingLotId = editingLotId === lot.id ? null : lot.id;
+        if (drawingLotId === lot.id) drawingLotId = null;
+        selectedMarking = null;
+        render();
       });
       const earlier = makeLotControl("←", "左へ移動", () => moveLot(lot.id, -1));
       const later = makeLotControl("→", "右へ移動", () => moveLot(lot.id, 1));
+      resize.textContent = editingLotId === lot.id ? "完了" : "サイズ調整";
       controls.append(resize, earlier, later);
       heading.append(controls);
     }
+    if (canManage && editingLotId === lot.id) card.classList.add("size-editing");
     const area = document.createElement("div");
     area.className = "lot-area";
     area.dataset.lotId = lot.id;
     area.style.height = `${Math.max(lot.area_height, Math.ceil(inLot.length / 4) * 52 + 24)}px`;
     card.style.setProperty("--lot-width", `${lot.area_width}%`);
     if (!inLot.length) area.classList.add("empty");
+    const markings = Array.isArray(lot.markings) ? lot.markings : [];
+    if (markings.length || editingLotId === lot.id) area.classList.remove("empty");
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.classList.add("lot-markings");
+    svg.setAttribute("viewBox", "0 0 1000 1000");
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("aria-label", `${lot.name}の線`);
+    svg.dataset.lotId = lot.id;
+    if (editingLotId === lot.id) {
+      svg.classList.add("editable");
+      svg.classList.toggle("drawing", drawingLotId === lot.id);
+      svg.addEventListener("pointerdown", (event) => startMarking(event, lot, svg));
+      svg.addEventListener("pointermove", moveMarking);
+      svg.addEventListener("pointerup", (event) => endMarking(event, lot, svg));
+      svg.addEventListener("pointercancel", cancelMarking);
+    }
+    for (const marking of markings) {
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.dataset.markingId = marking.id;
+      line.setAttribute("x1", marking.x1 * 1000);
+      line.setAttribute("y1", marking.y1 * 1000);
+      line.setAttribute("x2", marking.x2 * 1000);
+      line.setAttribute("y2", marking.y2 * 1000);
+      line.setAttribute("stroke", marking.color);
+      line.setAttribute("stroke-width", selectedMarking === marking.id ? "10" : "7");
+      line.setAttribute("stroke-linecap", "round");
+      line.setAttribute("pointer-events", editingLotId === lot.id ? "stroke" : "none");
+      if (selectedMarking === marking.id) line.classList.add("selected");
+      line.addEventListener("pointerdown", (event) => {
+        if (editingLotId !== lot.id || drawingLotId === lot.id) return;
+        event.stopPropagation();
+        selectedMarking = marking.id;
+        render();
+      });
+      svg.append(line);
+    }
+    if (editingLotId === lot.id && drawingLotId === lot.id) {
+      const preview = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      preview.classList.add("marking-preview");
+      preview.setAttribute("stroke", markingColors.get(lot.id) || "#e34b4b");
+      preview.setAttribute("stroke-width", "7");
+      preview.setAttribute("stroke-linecap", "round");
+      svg.append(preview);
+    }
+    area.append(svg);
     for (const vehicle of inLot) area.append(makeToken(vehicle));
+    let tools;
+    if (canManage && editingLotId === lot.id) {
+      tools = document.createElement("div");
+      tools.className = "lot-drawing-tools";
+      const draw = document.createElement("button");
+      draw.type = "button";
+      draw.className = "lot-control";
+      draw.textContent = drawingLotId === lot.id ? "描画終了" : "直線を引く";
+      draw.addEventListener("click", () => {
+        drawingLotId = drawingLotId === lot.id ? null : lot.id;
+        selectedMarking = null;
+        render();
+      });
+      const color = document.createElement("input");
+      color.type = "color";
+      color.id = `marking-color-${lot.id}`;
+      color.value = markingColors.get(lot.id) || "#e34b4b";
+      color.setAttribute("aria-label", "線の色");
+      color.addEventListener("input", () => {
+        markingColors.set(lot.id, color.value);
+        const preview = card.querySelector(".marking-preview");
+        if (preview) preview.setAttribute("stroke", color.value);
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger-button";
+      remove.textContent = "選択した線を削除";
+      remove.disabled = !selectedMarking;
+      remove.addEventListener("click", () => {
+        updateMarkings(lot, markings.filter((marking) => marking.id !== selectedMarking));
+      });
+      tools.append(draw, color, remove);
+      const guidance = document.createElement("span");
+      guidance.className = "lot-marking-guidance";
+      guidance.textContent = drawingLotId === lot.id
+        ? "位置内をドラッグして直線を引きます。"
+        : "線を選択してから削除できます。";
+      tools.append(guidance);
+      if (markingError) {
+        const error = document.createElement("span");
+        error.className = "lot-marking-error";
+        error.textContent = markingError;
+        tools.append(error);
+      }
+    }
     if (canManage) {
       const resizeHandle = document.createElement("button");
       resizeHandle.type = "button";
@@ -191,8 +290,91 @@
       resizeHandle.addEventListener("pointerdown", (event) => startResize(event, lot, card, area));
       area.append(resizeHandle);
     }
-    card.append(heading, area);
+    card.append(heading);
+    if (tools) card.append(tools);
+    card.append(area);
     return card;
+  }
+
+  let draftMarking = null;
+
+  function markingPosition(event, svg) {
+    const bounds = svg.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)),
+    };
+  }
+
+  function startMarking(event, lot, svg) {
+    if (drawingLotId !== lot.id || (event.button !== 0 && event.pointerType === "mouse")) return;
+    event.preventDefault();
+    const point = markingPosition(event, svg);
+    draftMarking = { lotId: lot.id, pointerId: event.pointerId, x1: point.x, y1: point.y, x2: point.x, y2: point.y };
+    const preview = svg.querySelector(".marking-preview");
+    preview?.setAttribute("x1", point.x * 1000);
+    preview?.setAttribute("y1", point.y * 1000);
+    preview?.setAttribute("x2", point.x * 1000);
+    preview?.setAttribute("y2", point.y * 1000);
+    svg.setPointerCapture(event.pointerId);
+  }
+
+  function moveMarking(event) {
+    if (!draftMarking || event.pointerId !== draftMarking.pointerId) return;
+    const svg = document.querySelector(`.lot-markings[data-lot-id="${draftMarking.lotId}"]`);
+    if (!svg) return;
+    const point = markingPosition(event, svg);
+    draftMarking.x2 = point.x;
+    draftMarking.y2 = point.y;
+    const preview = svg.querySelector(".marking-preview");
+    if (preview) {
+      preview.setAttribute("x2", point.x * 1000);
+      preview.setAttribute("y2", point.y * 1000);
+    }
+  }
+
+  async function endMarking(event, lot, svg) {
+    if (!draftMarking || event.pointerId !== draftMarking.pointerId) return;
+    moveMarking(event);
+    const draft = draftMarking;
+    draftMarking = null;
+    const markings = Array.isArray(lot.markings) ? lot.markings : [];
+    if (Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1) < 0.01) {
+      render();
+      return;
+    }
+    const color = document.querySelector(`#marking-color-${lot.id}`).value;
+    await updateMarkings(lot, [...markings, {
+      id: crypto.randomUUID(),
+      color,
+      x1: draft.x1,
+      y1: draft.y1,
+      x2: draft.x2,
+      y2: draft.y2,
+    }]);
+  }
+
+  function cancelMarking(event) {
+    if (draftMarking?.pointerId === event.pointerId) {
+      draftMarking = null;
+      document.querySelector(".marking-preview")?.removeAttribute("x1");
+    }
+  }
+
+  async function updateMarkings(lot, markings) {
+    try {
+      const updated = await api(`/api/parking-lots/${lot.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ markings }),
+      });
+      Object.assign(lot, updated);
+      selectedMarking = null;
+      markingError = "";
+      render();
+    } catch (error) {
+      markingError = error.message;
+      render();
+    }
   }
 
   function startResize(event, lot, card, area) {
@@ -538,7 +720,24 @@
           locationError.textContent = error.message;
         }
       });
-      row.append(input, navigationInput, save);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger-button";
+      remove.textContent = "削除";
+      remove.title = "車両が配置されている位置は削除できません";
+      remove.addEventListener("click", async () => {
+        locationError.textContent = "";
+        if (!window.confirm(`位置「${lot.name}」を削除しますか？`)) return;
+        try {
+          await api(`/api/parking-lots/${lot.id}`, { method: "DELETE" });
+          lots = lots.filter((entry) => entry.id !== lot.id);
+          render();
+          renderLocationManager();
+        } catch (error) {
+          locationError.textContent = error.message;
+        }
+      });
+      row.append(input, navigationInput, save, remove);
       list.append(row);
     }
   }
@@ -592,7 +791,59 @@
           toggle.disabled = false;
         }
       });
-      row.append(details, toggle);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger-button franchise-delete-button";
+      remove.textContent = "加盟店を削除";
+      remove.addEventListener("click", () => {
+        row.querySelector(".franchise-delete-confirm")?.remove();
+        const confirmation = document.createElement("div");
+        confirmation.className = "franchise-delete-confirm";
+        const warning = document.createElement("span");
+        warning.textContent = `全アカウント・車両・位置を削除します。続行するには「${franchise.name}」を入力してください。`;
+        const input = document.createElement("input");
+        input.type = "text";
+        input.autocomplete = "off";
+        input.placeholder = franchise.name;
+        input.setAttribute("aria-label", "削除する加盟店名");
+        const actions = document.createElement("div");
+        actions.className = "franchise-delete-actions";
+        const confirm = document.createElement("button");
+        confirm.type = "button";
+        confirm.className = "danger-button";
+        confirm.textContent = "完全に削除";
+        confirm.addEventListener("click", async () => {
+          franchiseError.textContent = "";
+          if (input.value.trim() !== franchise.name) {
+            franchiseError.textContent = "加盟店名が一致しません。";
+            return;
+          }
+          confirm.disabled = true;
+          try {
+            await api(`/api/franchises/${franchise.id}`, {
+              method: "DELETE",
+              body: JSON.stringify({ confirmation_name: input.value }),
+            });
+            await loadFranchises();
+          } catch (error) {
+            franchiseError.textContent = error.message;
+            confirm.disabled = false;
+          }
+        });
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "quiet-button";
+        cancel.textContent = "キャンセル";
+        cancel.addEventListener("click", () => confirmation.remove());
+        actions.append(confirm, cancel);
+        confirmation.append(warning, input, actions);
+        row.append(confirmation);
+        input.focus();
+      });
+      const buttons = document.createElement("div");
+      buttons.className = "franchise-row-actions";
+      buttons.append(toggle, remove);
+      row.append(details, buttons);
       list.append(row);
     }
   }
@@ -612,6 +863,9 @@
     formError.textContent = "";
     document.querySelector("#dialog-title").textContent = vehicle ? "車両情報を編集" : "車両を追加";
     document.querySelector("#delete-vehicle").hidden = !vehicle || !canManage;
+    const defaultLot = lots.find((lot) => lot.name === "予備") || lots[0];
+    document.querySelector(".default-location-note").textContent =
+      `追加した車両は「${defaultLot?.name || "最初の位置"}」に登録されます。`;
     vehicleForm.elements.id.value = vehicle?.id || "";
     vehicleForm.elements.plate.value = vehicle?.plate || "";
     vehicleForm.elements.vehicle_type.value = vehicle?.vehicle_type || vehicleTypes[0] || "";
@@ -630,8 +884,10 @@
     socket.addEventListener("message", () => loadBoard().catch(showError));
     socket.addEventListener("close", (event) => {
       setConnection(false);
-      if (event.code === 4003) {
-        loginError.textContent = "この加盟店アカウントは一時停止中です。総本店へお問い合わせください。";
+      if (event.code === 4003 || event.code === 4004) {
+        loginError.textContent = event.code === 4003
+          ? "この加盟店アカウントは一時停止中です。総本店へお問い合わせください。"
+          : "この加盟店アカウントは削除されました。総本店へお問い合わせください。";
         showLogin();
         return;
       }

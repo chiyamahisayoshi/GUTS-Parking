@@ -59,9 +59,22 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .lot-control:hover { border-color: #8ecfd1; color: var(--teal); }
 .layout-control { display: none; }
 .lot-card.size-editing .layout-control { display: inline-block; }
-.lot-area { min-height: 160px; position: relative; overflow: hidden; background-color: #f8fafb; background-image: linear-gradient(90deg, transparent 49.5%, #e9eff2 50%, transparent 50.5%), linear-gradient(0deg, transparent 49.5%, #e9eff2 50%, transparent 50.5%); background-size: 44px 44px; touch-action: none; }
+.lot-area { min-height: 160px; position: relative; overflow: hidden; background-color: #f8fafb; background-image: linear-gradient(90deg, transparent 49.5%, #e9eff2 50%, transparent 50.5%), linear-gradient(0deg, transparent 49.5%, #e9eff2 50%, transparent 50.5%); background-size: 44px 44px; touch-action: pan-y; }
 .lot-resize-handle { display: none; position: absolute; z-index: 2; right: 2px; bottom: 2px; width: 26px; height: 26px; border: 0; border-radius: 5px; background: #087e8b; color: #fff; font-size: 15px; line-height: 1; cursor: nwse-resize; touch-action: none; }
 .lot-card.size-editing .lot-resize-handle { display: grid; place-items: center; }
+.lot-markings { position: absolute; z-index: 2; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.lot-markings line { pointer-events: none; }
+.lot-markings.editable line { pointer-events: stroke; cursor: pointer; }
+.lot-markings.editable.drawing { pointer-events: auto; touch-action: none; cursor: crosshair; }
+.lot-markings.editable.drawing line { pointer-events: none; }
+.lot-markings .selected { filter: drop-shadow(0 0 2px #172b4d); }
+.marking-preview { stroke-dasharray: 10 8; pointer-events: none; }
+.lot-drawing-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 8px 10px; border-bottom: 1px solid #edf0f4; background: #f8fafb; }
+.lot-drawing-tools input[type="color"] { width: 38px; height: 32px; padding: 2px; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+.lot-drawing-tools .danger-button { padding: 7px 9px; font-size: 11px; }
+.lot-drawing-tools .danger-button:disabled { opacity: .5; cursor: not-allowed; }
+.lot-marking-guidance { flex: 1 1 100%; color: var(--muted); font-size: 10px; }
+.lot-marking-error { flex: 1 1 100%; color: #b44d48; font-size: 11px; }
 .lot-area.drop-target { background-color: #e9f8f2; outline: 2px solid #69c89e; outline-offset: -3px; }
 .lot-area:before { content: ""; position: absolute; inset: 9px; border: 1px dashed #d8e1e6; border-radius: 8px; pointer-events: none; }
 .lot-area.empty:after { content: "車両をここへ移動"; position: absolute; inset: 0; display: grid; place-items: center; color: #aab5c2; font-size: 11px; pointer-events: none; }
@@ -130,7 +143,7 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
 .location-form { padding: 24px; width: min(100%, 620px); }
 .location-form > .muted { line-height: 1.6; margin: 8px 0 16px; }
 .location-list { display: grid; gap: 8px; max-height: min(50vh, 430px); overflow: auto; padding: 2px; }
-.location-row { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(150px, 1.3fr) auto; align-items: center; gap: 8px; }
+.location-row { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(150px, 1.3fr) auto auto; align-items: center; gap: 8px; }
 .location-row input, .add-location-form input { width: 100%; min-width: 0; border: 1px solid #d9e2e9; border-radius: 8px; padding: 9px 11px; color: var(--ink); }
 .location-row .primary-button { padding: 9px 10px; font-size: 11px; }
 .add-location-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto; align-items: flex-end; gap: 8px; padding-top: 15px; border-top: 1px solid #edf0f4; }
@@ -146,6 +159,11 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
 .franchise-row .franchise-active { color: #31815f; }
 .franchise-row .franchise-suspended { color: #b44d48; font-weight: 700; }
 .franchise-row button { flex: none; padding: 8px 10px; }
+.franchise-row-actions { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.franchise-delete-confirm { grid-column: 1 / -1; display: grid; gap: 8px; width: 100%; padding-top: 8px; border-top: 1px solid var(--border); }
+.franchise-delete-confirm > span { font-size: 11px; line-height: 1.5; color: #a63e36; }
+.franchise-delete-confirm input { width: 100%; min-width: 0; border: 1px solid #d9e2e9; border-radius: 8px; padding: 9px 11px; }
+.franchise-delete-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .add-franchise-form { display: grid; gap: 9px; padding-top: 15px; border-top: 1px solid #edf0f4; }
 .add-franchise-form label { display: grid; gap: 6px; color: #44566f; font-size: 12px; font-weight: 650; }
 .add-franchise-form input { width: 100%; border: 1px solid #d9e2e9; border-radius: 8px; padding: 9px 11px; color: var(--ink); }
@@ -162,27 +180,34 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
   .page-content { padding-top: 24px; }
 }
 @media (max-width: 560px) {
-  .topbar { height: 62px; padding: 0 14px; }
+  .topbar { min-height: 62px; height: auto; padding: 8px 12px; gap: 8px; }
   .brand { gap: 8px; }
+  .brand-mark.small { flex: none; width: 34px; height: 34px; }
   .brand b { font-size: 12px; }
   .brand small { font-size: 8px; }
-  .topbar-actions { gap: 8px; }
+  .topbar-actions { min-width: 0; gap: 6px; }
   .current-user { display: none; }
-  .quiet-button { padding: 8px 10px; font-size: 11px; }
-  .connection { font-size: 10px; }
+  .topbar-actions .quiet-button { white-space: nowrap; padding: 7px 8px; font-size: 10px; }
+  .connection { gap: 4px; font-size: 9px; white-space: nowrap; }
   .page-content { padding: 22px 13px 40px; }
-  .page-heading { align-items: flex-start; }
-  .page-actions { flex-direction: column-reverse; align-items: stretch; }
+  .page-heading { flex-direction: column; align-items: stretch; gap: 12px; }
+  .page-actions { flex-direction: row; flex-wrap: wrap; align-items: stretch; }
   .page-heading h1 { font-size: 21px; }
-  .page-heading .muted { font-size: 11px; line-height: 1.6; max-width: 255px; }
-  .page-heading .primary-button { white-space: nowrap; padding: 10px; font-size: 11px; }
+  .page-heading .muted { font-size: 11px; line-height: 1.6; max-width: none; }
+  .page-heading .primary-button { flex: 1 1 140px; white-space: normal; padding: 10px; font-size: 11px; }
   .summary-row { gap: 7px; margin: 15px 0; }
   .summary-card { padding: 10px; min-height: 58px; }
   .summary-card span { font-size: 10px; }
   .summary-card b { font-size: 18px; }
-  .parking-grid { gap: 10px; }
-  .lot-card { flex-basis: clamp(180px, calc(var(--lot-width, 50%) - 5px), 100%); }
+  .parking-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .lot-card { width: 100%; max-width: 100%; min-width: 0; }
+  .lot-heading { flex-wrap: wrap; padding: 8px 9px; }
+  .lot-heading-title { flex: 1 1 auto; }
+  .lot-controls { flex-wrap: wrap; justify-content: flex-end; }
+  .lot-control { min-width: 34px; min-height: 32px; }
   .lot-area { min-height: 210px; }
+  .vehicle-token { min-width: 54px; max-width: min(110px, 30vw); padding: 5px 6px; font-size: 9px; }
+  .token-badges { font-size: 7px; }
   .vehicle-catalog-list { grid-template-columns: 1fr; }
   .status-section { margin-top: 29px; }
   .status-list { grid-template-columns: 1fr; }
@@ -193,9 +218,9 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
   .franchise-row { align-items: flex-start; padding: 9px; }
   .franchise-row button { font-size: 11px; padding: 8px; }
   .add-franchise-form .primary-button { width: 100%; }
-  .location-row { grid-template-columns: minmax(0, 1fr) auto; gap: 5px; }
-  .location-row input:nth-child(2) { grid-column: 1 / -1; }
-  .location-row .primary-button { padding: 8px 9px; }
+  .location-row { grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, auto); gap: 5px; }
+  .location-row input:nth-child(1), .location-row input:nth-child(2) { grid-column: 1 / -1; }
+  .location-row .primary-button, .location-row .danger-button { padding: 8px 9px; font-size: 11px; }
   .add-location-form { grid-template-columns: 1fr; align-items: stretch; }
   .status-fields, .option-fields { gap: 12px; }
   .dialog-actions { flex-wrap: wrap; }
@@ -203,4 +228,7 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
   .danger-button { margin-right: auto; }
   .filter-row { gap: 6px; }
   .filter-button { font-size: 11px; padding: 8px 9px; }
+  .franchise-row { flex-wrap: wrap; }
+  .franchise-row > div { flex: 1 1 100%; }
+  .franchise-row-actions { width: 100%; justify-content: flex-start; }
 }

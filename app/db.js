@@ -48,6 +48,7 @@ function openDatabase(databasePath) {
       area_height INTEGER NOT NULL DEFAULT 210,
       area_width INTEGER NOT NULL DEFAULT 50,
       navigation_url TEXT NOT NULL DEFAULT '',
+      markings TEXT NOT NULL DEFAULT '[]',
       tenant_id INTEGER NOT NULL REFERENCES tenants(id)
     );
     CREATE TABLE IF NOT EXISTS vehicles (
@@ -105,6 +106,9 @@ function openDatabase(databasePath) {
   if (!lotColumns.has("navigation_url")) {
     db.exec("ALTER TABLE parking_lots ADD COLUMN navigation_url TEXT NOT NULL DEFAULT ''");
   }
+  if (!lotColumns.has("markings")) {
+    db.exec("ALTER TABLE parking_lots ADD COLUMN markings TEXT NOT NULL DEFAULT '[]'");
+  }
   if (!columns.has("options")) {
     db.exec("ALTER TABLE vehicles ADD COLUMN options TEXT NOT NULL DEFAULT '[]'");
   }
@@ -149,11 +153,12 @@ function openDatabase(databasePath) {
           area_height INTEGER NOT NULL DEFAULT 210,
           area_width INTEGER NOT NULL DEFAULT 50,
           navigation_url TEXT NOT NULL DEFAULT '',
+          markings TEXT NOT NULL DEFAULT '[]',
           tenant_id INTEGER NOT NULL REFERENCES tenants(id)
         );
         INSERT INTO parking_lots_tenant_new
-          (id, name, display_order, area_height, area_width, navigation_url, tenant_id)
-        SELECT id, name, display_order, area_height, area_width, navigation_url, tenant_id
+          (id, name, display_order, area_height, area_width, navigation_url, markings, tenant_id)
+        SELECT id, name, display_order, area_height, area_width, navigation_url, markings, tenant_id
         FROM parking_lots;
         DROP TABLE parking_lots;
         ALTER TABLE parking_lots_tenant_new RENAME TO parking_lots;
