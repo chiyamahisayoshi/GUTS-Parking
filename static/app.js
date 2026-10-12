@@ -75,7 +75,6 @@
     document.querySelector("#manage-locations-button").hidden = !canManage;
     document.querySelector("#add-vehicle-button").hidden = !canManage;
     document.querySelector("#manage-franchises-button").hidden = !canManageFranchises;
-    document.querySelector("#manage-statuses-button").hidden = !canManage;
     connectSocket();
     loadBoard().catch(showError);
   }
@@ -85,7 +84,7 @@
     document.querySelectorAll("[data-app-version]").forEach((element) => {
       element.textContent = `v${version}`;
     });
-    document.title = `Rental Car Board v${version}`;
+    document.title = `Guts 車両配置ボード v${version}`;
   }
 
   function showError(error) {
@@ -235,6 +234,15 @@
     if (editingLotId === lot.id) {
       svg.classList.add("editable");
       svg.classList.toggle("drawing", drawingLotId === lot.id);
+      if (drawingLotId === lot.id) {
+        const hitArea = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        hitArea.classList.add("marking-canvas");
+        hitArea.setAttribute("width", "1000");
+        hitArea.setAttribute("height", "1000");
+        hitArea.setAttribute("fill", "transparent");
+        hitArea.setAttribute("pointer-events", "all");
+        svg.append(hitArea);
+      }
       svg.addEventListener("pointerdown", (event) => startMarking(event, lot, svg));
       svg.addEventListener("pointermove", moveMarking);
       svg.addEventListener("pointerup", (event) => endMarking(event, lot, svg));
@@ -1165,7 +1173,15 @@
     drag.button.classList.remove("dragging");
     if (drag.moved) {
       suppressDamageClick = true;
-      addInspectionMark(drag.type.id, event.clientX, event.clientY);
+      const placed = addInspectionMark(drag.type.id, event.clientX, event.clientY);
+      const hint = document.querySelector("#inspection-hint");
+      if (placed) {
+        hint.textContent = `${drag.type.name}の位置を記録しました。車両の保存時に一緒に保存されます。`;
+      } else {
+        selectedDamageTypeId = drag.type.id;
+        renderInspectionDiagram();
+        hint.textContent = "3D車体の表面まで損傷アイコンをドラッグしてください。";
+      }
       window.setTimeout(() => { suppressDamageClick = false; }, 0);
     }
   }
@@ -1406,7 +1422,7 @@
     document.querySelector("#manage-options-button").hidden = !canManage;
     document.querySelector("#manage-vehicle-statuses-button").hidden = !canManage;
     document.querySelector("#delete-vehicle").hidden = !vehicle || !canManage;
-    const defaultLot = lots.find((lot) => lot.name === "予備") || lots[0];
+    const defaultLot = lots[0];
     document.querySelector(".default-location-note").textContent =
       `追加した車両は「${defaultLot?.name || "最初の位置"}」に登録されます。`;
     vehicleForm.elements.id.value = vehicle?.id || "";
@@ -1417,6 +1433,7 @@
     inspectionMarks = vehicle?.inspection_marks?.map((mark) => ({ ...mark })) || [];
     selectedDamageTypeId = null;
     renderAssessmentFields(vehicle?.assessment_values || {});
+    vehicleForm.elements.notes.value = vehicle?.notes || "";
     renderInspectionDiagram();
     dialog.showModal();
   }
@@ -1493,7 +1510,6 @@
   document.querySelector("#add-vehicle-button").addEventListener("click", () => openVehicle());
   document.querySelector("#manage-locations-button").addEventListener("click", openLocationManager);
   document.querySelector("#manage-franchises-button").addEventListener("click", openFranchiseManager);
-  document.querySelector("#manage-statuses-button").addEventListener("click", openStatusManager);
   document.querySelector("#manage-vehicle-statuses-button").addEventListener("click", openStatusManager);
   document.querySelector("#manage-options-button").addEventListener("click", () => {
     document.querySelector("#option-error").textContent = "";
@@ -1671,6 +1687,7 @@
       plate: form.get("plate"),
       vehicle_type: form.get("vehicle_type"),
       options: form.getAll("options"),
+      notes: form.get("notes"),
     };
     payload.status_ids = form.getAll("status_ids").map(Number);
     payload.assessment_values = collectAssessmentValues();

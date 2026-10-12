@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f2f5f8">
-  <title>Rental Car Board</title>
+  <title>Guts 車両配置ボード</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <main id="login-screen" class="login-screen" hidden>
     <form id="login-form" class="login-card">
-      <div class="brand-mark">R</div>
-      <p class="eyebrow">RENTAL CAR OPERATIONS</p>
+      <div class="brand-mark">G</div>
+      <p class="eyebrow">GUTS FLEET OPERATIONS</p>
       <h1>車両配置ボード</h1>
       <p class="muted">ログインして共有ボードを開きます。</p>
       <label>ユーザー名<input name="username" autocomplete="username" required maxlength="80"></label>
@@ -23,9 +23,9 @@
   </main>
   <div id="app-screen" hidden>
     <header class="topbar">
-      <a class="brand" href="/" aria-label="Rental Car Board">
-        <span class="brand-mark small">R</span>
-        <span><b>車両配置ボード</b><small>RENTAL CAR OPERATIONS · <span data-app-version></span></small></span>
+      <a class="brand" href="/" aria-label="Guts 車両配置ボード">
+        <span class="brand-mark small">G</span>
+        <span><b>Guts 車両配置ボード</b><small>GUTS FLEET OPERATIONS · <span data-app-version></span></small></span>
       </a>
       <div class="topbar-actions">
         <span id="connection-state" class="connection"><i></i>接続中</span>
@@ -58,7 +58,6 @@
               <div id="status-filters" class="filter-row" role="group" aria-label="車両ステータスで絞り込み">
                 <button class="filter-button active" data-filter="all">すべて</button>
               </div>
-              <button id="manage-statuses-button" class="quiet-button" hidden>ステータスを管理</button>
             </div>
             <div id="status-list" class="status-list"></div>
           </div>
@@ -83,7 +82,7 @@
       <label>ナンバー<input name="plate" required maxlength="40" placeholder="例: 品川 500 あ 1234"></label>
       <div class="form-row">
         <label>車種・タイプ<select name="vehicle_type" required></select></label>
-        <p class="default-location-note">追加した車両は「予備」に登録されます。</p>
+        <p class="default-location-note">追加した車両は一番上の位置に登録されます。</p>
       </div>
       <fieldset class="option-fields">
         <legend>オプション</legend>
@@ -101,6 +100,7 @@
           <button id="manage-assessment-button" class="quiet-button" type="button" hidden>評価項目・損傷種類を管理</button>
         </div>
         <div id="assessment-fields"></div>
+        <label class="assessment-notes-field">備考欄<textarea name="notes" rows="4" maxlength="5000" placeholder="車両について共有したいことを記録できます。"></textarea></label>
       </section>
       <section class="inspection-section">
         <div><p class="eyebrow">DAMAGE INSPECTION</p><h3>車体の損傷位置</h3></div>

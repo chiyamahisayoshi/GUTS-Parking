@@ -314,7 +314,7 @@ function getDefaultParkingLotId(db, tenantId) {
   return db.prepare(`
     SELECT id FROM parking_lots
     WHERE tenant_id = ?
-    ORDER BY CASE WHEN name = '予備' THEN 0 ELSE 1 END, display_order, id
+    ORDER BY display_order, id
     LIMIT 1
   `).get(tenantId)?.id;
 }
@@ -493,7 +493,7 @@ function createApplication(options = {}) {
     ).all(request.tenantId).map(parkingLotFromRow);
     const vehicleRows = db.prepare(`
       SELECT id, external_id, plate, vehicle_type, parking_lot_id,
-             position_x, position_y, unwashed, no_fuel, needs_repair, options
+             position_x, position_y, unwashed, no_fuel, needs_repair, options, notes
       FROM vehicles WHERE tenant_id = ? ORDER BY plate, id
     `).all(request.tenantId);
     const statusAssignments = new Map();
@@ -1070,6 +1070,10 @@ function createApplication(options = {}) {
       ) {
         return response.status(422).json({ detail: "Valid plate and vehicle type are required." });
       }
+      if (body.notes !== undefined &&
+          (typeof body.notes !== "string" || body.notes.length > 5000)) {
+        return response.status(422).json({ detail: "Vehicle notes must be 5000 characters or fewer." });
+      }
       const lotId = body.parking_lot_id ?? getDefaultParkingLotId(db, request.tenantId);
       if (!Number.isInteger(lotId) || !validateLot(lotId, request.tenantId)) {
         return response.status(422).json({ detail: "Unknown parking lot." });
@@ -1123,12 +1127,12 @@ function createApplication(options = {}) {
         result = db.prepare(`
           INSERT INTO vehicles
             (plate, vehicle_type, parking_lot_id, position_x, position_y,
-             unwashed, no_fuel, needs_repair, options, tenant_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             unwashed, no_fuel, needs_repair, options, notes, tenant_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           plate.trim(), vehicleType.trim(), lotId ?? null, position.positionX, position.positionY,
           ...STATUSES.map((status) => Number(assignedStatusIds.has(legacyStatusIds.get(status)))),
-          JSON.stringify(options), request.tenantId,
+          JSON.stringify(options), (body.notes || "").trim(), request.tenantId,
         );
         const addAssignment = db.prepare(
           "INSERT INTO vehicle_status_assignments (vehicle_id, status_id) VALUES (?, ?)",
@@ -1161,7 +1165,7 @@ function createApplication(options = {}) {
       if (!existingVehicle) return response.status(404).json({ detail: "Vehicle not found." });
       const allowed = new Set([
         "plate", "vehicle_type", "parking_lot_id", "position_x", "position_y",
-        "options", "status_ids", "assessment_values", "inspection_marks", ...STATUSES,
+        "options", "status_ids", "assessment_values", "inspection_marks", "notes", ...STATUSES,
       ]);
       const entries = Object.entries(request.body || {});
       if (!entries.length) return response.status(422).json({ detail: "No vehicle fields supplied." });
@@ -1211,6 +1215,12 @@ function createApplication(options = {}) {
       if (Object.hasOwn(data, "vehicle_type") && !VEHICLE_TYPES.includes(data.vehicle_type)) {
         return response.status(422).json({ detail: "Unknown vehicle type." });
       }
+      if (Object.hasOwn(data, "notes")) {
+        if (typeof data.notes !== "string" || data.notes.length > 5000) {
+          return response.status(422).json({ detail: "Vehicle notes must be 5000 characters or fewer." });
+        }
+        data.notes = data.notes.trim();
+      }
       if (Object.hasOwn(data, "options")) {
         if (!vehicleOptionsAreValid(db, data.options, request.tenantId)) {
           return response.status(422).json({ detail: "Invalid vehicle options." });
@@ -1224,8 +1234,7 @@ function createApplication(options = {}) {
         return response.status(422).json({ detail: "Vehicle coordinates must be between 0 and 1." });
       }
       if (Object.hasOwn(data, "parking_lot_id") && data.parking_lot_id === null) {
-        data.parking_lot_id = db.prepare("SELECT id FROM parking_lots WHERE tenant_id = ? AND name = '予備'")
-          .get(request.tenantId).id;
+        data.parking_lot_id = getDefaultParkingLotId(db, request.tenantId);
       }
       if (Object.hasOwn(data, "parking_lot_id") &&
           (!Number.isInteger(data.parking_lot_id) || !validateLot(data.parking_lot_id, request.tenantId))) {
@@ -1380,7 +1389,7 @@ async function start() {
   const server = application.createServer();
   const port = Number(process.env.PORT || 8000);
   const host = process.env.HOST || "127.0.0.1";
-  server.listen(port, host, () => console.log(`Rental car board listening on http://${host}:${port}`));
+  server.listen(port, host, () => console.log(`Guts board listening on http://${host}:${port}`));
   const shutdown = () => {
     server.close(() => {
       application.db.close();

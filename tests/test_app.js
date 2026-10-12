@@ -70,13 +70,16 @@ test("serves the browser UI but protects vehicle data until login", async () => 
 test("uses full-width parking cards and compact controls on phone layouts", () => {
   const stylesheet = fs.readFileSync(path.join(__dirname, "..", "static", "style.css"), "utf8");
   const html = fs.readFileSync(path.join(__dirname, "..", "static", "index.html"), "utf8");
+  const script = fs.readFileSync(path.join(__dirname, "..", "static", "app.js"), "utf8");
   assert.ok(html.indexOf('id="status-panel"') < html.indexOf('class="board-workspace"'));
   assert.match(html, /<details id="status-panel" open>/);
-  assert.match(html, /id="manage-statuses-button"/);
+  assert.doesNotMatch(html, /id="manage-statuses-button"/);
   assert.match(html, /id="vehicle-status-options"/);
   assert.match(html, /id="manage-options-button"/);
   assert.match(html, /id="manage-vehicle-statuses-button"/);
+  assert.match(html, /<fieldset class="status-fields">[\s\S]*?id="manage-vehicle-statuses-button"[\s\S]*?<\/fieldset>/);
   assert.match(html, /車両状態評価シート/);
+  assert.match(html, /assessment-fields[\s\S]*?name="notes"[\s\S]*?<\/section>/);
   assert.match(html, /車体の損傷位置/);
   assert.match(html, /id="inspection-car-view"[^>]*360度回転/);
   assert.match(html, /static\/inspection3d\.mjs/);
@@ -86,6 +89,7 @@ test("uses full-width parking cards and compact controls on phone layouts", () =
   assert.match(phoneLayout, /\.lot-card\s*\{\s*width:\s*100%;\s*max-width:\s*100%/);
   assert.match(phoneLayout, /\.topbar\s*\{\s*min-height:\s*62px;\s*height:\s*auto/);
   assert.match(stylesheet, /\.lot-markings\.editable\.drawing\s*\{[^}]*touch-action:\s*none/);
+  assert.match(script, /classList\.add\("marking-canvas"\)/);
 });
 
 test("keeps undo and edge auto-scroll controls wired into vehicle interactions", async () => {
@@ -286,6 +290,7 @@ test("persists editable vehicle assessment fields and damage marks", async () =>
     world_z: 0.79,
   };
   const updated = await agent.patch(`/api/vehicles/${vehicleId}`).send({
+    notes: "冬タイヤはトランクに保管しています。",
     assessment_values: {
       [exterior.id]: "4",
       [documentField.id]: true,
@@ -302,6 +307,7 @@ test("persists editable vehicle assessment fields and damage marks", async () =>
     }],
   });
   assert.equal(updated.status, 200);
+  assert.equal(updated.body.notes, "冬タイヤはトランクに保管しています。");
   assert.equal(updated.body.assessment_values[exterior.id], "4");
   assert.equal(updated.body.assessment_values[documentField.id], "true");
   assert.equal(updated.body.assessment_values[mileage.id], "123456");
@@ -317,6 +323,7 @@ test("persists editable vehicle assessment fields and damage marks", async () =>
   const boardVehicle = (await agent.get("/api/bootstrap")).body.vehicles
     .find((vehicle) => vehicle.id === vehicleId);
   assert.equal(boardVehicle.assessment_values[year.id], "2022");
+  assert.equal(boardVehicle.notes, "冬タイヤはトランクに保管しています。");
   assert.equal(boardVehicle.inspection_marks[1].name, "ガラス割れ");
 
   assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
@@ -331,6 +338,9 @@ test("persists editable vehicle assessment fields and damage marks", async () =>
   assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
     inspection_marks: [{ ...mark, world_z: 4 }],
   })).status, 422);
+  assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
+    notes: "x".repeat(5001),
+  })).status, 422);
   assert.equal((await agent.post("/api/assessment-fields").send({
     name: "不正形式",
     field_type: "unknown",
@@ -343,6 +353,7 @@ test("persists editable vehicle assessment fields and damage marks", async () =>
   const unchanged = await agent.patch(`/api/vehicles/${vehicleId}`).send({ plate: "評価保持テスト" });
   assert.equal(unchanged.body.assessment_values[exterior.id], "4");
   assert.equal(unchanged.body.inspection_marks.length, 2);
+  assert.equal(unchanged.body.notes, "冬タイヤはトランクに保管しています。");
   assert.equal((await agent.delete(`/api/assessment-fields/${customField.body.id}`)).status, 204);
   assert.equal((await agent.delete(`/api/damage-types/${customDamage.body.id}`)).status, 204);
   const afterDelete = (await agent.get("/api/bootstrap")).body.vehicles
@@ -688,10 +699,12 @@ test("syncs ERP records idempotently while preserving board-managed status and p
       (await erpAgent.post("/api/integration/vehicles:sync").set(headers).send([withoutLocation])).body,
       { synced: 1 },
     );
-    const reserveLotId = appWithErp.db.prepare("SELECT id FROM parking_lots WHERE name = '予備'").get().id;
+    const firstLotId = appWithErp.db.prepare(
+      "SELECT id FROM parking_lots WHERE tenant_id = 1 ORDER BY display_order, id LIMIT 1",
+    ).get().id;
     const defaultVehicle = appWithErp.db.prepare("SELECT * FROM vehicles WHERE external_id = ?")
       .get(withoutLocation.external_id);
-    assert.equal(defaultVehicle.parking_lot_id, reserveLotId);
+    assert.equal(defaultVehicle.parking_lot_id, firstLotId);
     appWithErp.db.prepare("UPDATE vehicles SET parking_lot_id = 2 WHERE id = ?").run(defaultVehicle.id);
     withoutLocation.plate = "品川 500 あ 4444";
     await erpAgent.post("/api/integration/vehicles:sync").set(headers).send([withoutLocation]);
@@ -734,18 +747,24 @@ test("deletes a vehicle and reports missing ids", async () => {
   }).set("Origin", "https://attacker.example")).status, 403);
 });
 
-test("creates new vehicles in reserve and moves them between peer locations", async () => {
+test("creates new vehicles in the top location and moves them between peer locations", async () => {
   const created = await agent.post("/api/vehicles").send({
-    plate: "予備 100 あ 0001",
+    plate: "新規 100 あ 0001",
     vehicle_type: "A-1",
     options: ["禁煙", "スタッドレス"],
+    notes: "ナビの調子を確認",
   });
   assert.equal(created.status, 201);
   const locations = (await agent.get("/api/bootstrap")).body.parking_lots;
-  const reserve = locations.find((lot) => lot.name === "予備");
-  assert.equal(created.body.parking_lot_id, reserve.id);
+  assert.equal(created.body.parking_lot_id, locations[0].id);
   assert.equal(Object.hasOwn(created.body, "board_section"), false);
   assert.deepEqual(created.body.options, ["禁煙", "スタッドレス"]);
+  assert.equal(created.body.notes, "ナビの調子を確認");
+  assert.equal((await agent.post("/api/vehicles").send({
+    plate: "備考過長 100 あ 0002",
+    vehicle_type: "A-1",
+    notes: "x".repeat(5001),
+  })).status, 422);
   const moved = await agent.patch(`/api/vehicles/${created.body.id}`).send({
     parking_lot_id: locations.find((lot) => lot.name === "駅前店貸出中").id,
     position_x: 0.37,
