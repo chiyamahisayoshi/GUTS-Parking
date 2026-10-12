@@ -94,7 +94,7 @@
   </div>
   <dialog id="vehicle-dialog" class="vehicle-dialog">
     <form id="vehicle-form" class="vehicle-form">
-      <div class="dialog-heading"><div><h2 id="dialog-title">車両を追加</h2></div><button type="button" id="close-dialog" class="close-button" aria-label="閉じる">×</button></div>
+      <div class="dialog-heading"><div><h2 id="dialog-title">車両を追加</h2></div><div class="heading-actions"><button type="button" id="cancel-dialog" class="quiet-button">キャンセル</button><button type="submit" class="primary-button">保存</button><button type="button" id="close-dialog" class="close-button" aria-label="閉じる">×</button></div></div>
       <input type="hidden" name="id">
       <label>ナンバー<input name="plate" required maxlength="40" placeholder="例: 品川 500 あ 1234"></label>
       <div class="form-row">
@@ -130,7 +130,7 @@
         <div id="inspection-mark-list" class="inspection-mark-list"></div>
       </section>
       <p id="form-error" class="error-message" role="alert"></p>
-      <div class="dialog-actions"><button type="button" id="delete-vehicle" class="danger-button" hidden>車両を削除</button><span></span><button type="button" id="cancel-dialog" class="quiet-button">キャンセル</button><button type="submit" class="primary-button">保存</button></div>
+      <div class="dialog-actions"><button type="button" id="delete-vehicle" class="danger-button" hidden>車両を削除</button><span></span></div>
     </form>
   </dialog>
   <dialog id="assessment-manager-dialog">
