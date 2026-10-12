@@ -1195,6 +1195,31 @@ test("flattens previous board sections into peer locations without losing vehicl
   }
 });
 
+test("translates the interface to Chinese and English without altering Japanese", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../static/index.html"), "utf8");
+  assert.doesNotMatch(html, /class="eyebrow"/);
+  assert.match(html, /class="language-select"/);
+  assert.match(html, /\/static\/i18n\.js/);
+  const window = { confirm: () => true };
+  const context = vm.createContext({
+    window,
+    document: { readyState: "loading", addEventListener() {} },
+    MutationObserver: class { observe() {} },
+    Node: {}, NodeFilter: {}, localStorage: {},
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "../static/i18n.js"), "utf8"), context);
+  const { translate } = window.gutsI18n;
+  assert.equal(translate("ジョブ", "ja"), "ジョブ");
+  assert.equal(translate("ジョブ", "en"), "Dispatch");
+  assert.equal(translate("ステータス別の車両", "en"), "Follow-up");
+  assert.equal(translate("車両一覧", "zh"), "车辆一览");
+  assert.equal(translate("3 台", "en"), "3 vehicles");
+  assert.equal(translate("  ジョブはありません。 ", "zh"), "  没有任务。 ");
+  assert.equal(translate("駐車場 1 · H-2", "en"), "Lot 1 · H-2");
+  assert.equal(translate("ユーザー固有の名前", "en"), "ユーザー固有の名前");
+  assert.match(translate("通信エラー 線はサーバーに保存されていません。", "en"), /not saved/);
+});
+
 test("wires catalog search, token blink and labelled job time inputs", () => {
   const html = fs.readFileSync(path.join(__dirname, "../static/index.html"), "utf8");
   const script = fs.readFileSync(path.join(__dirname, "../static/app.js"), "utf8");
