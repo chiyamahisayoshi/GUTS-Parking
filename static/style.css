@@ -355,3 +355,6 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
 .job-time-inputs { position: relative; display: flex; gap: 6px; }
 .job-time-inputs #job-time-text { flex: 1; }
 .job-time-picker { position: absolute; right: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.language-select { border: 1px solid #d9e2e9; border-radius: 8px; background: #fff; color: var(--ink); padding: 7px 9px; font-size: 13px; }
+.login-language { position: fixed; top: 14px; right: 14px; z-index: 5; }
+.login-screen { position: relative; }

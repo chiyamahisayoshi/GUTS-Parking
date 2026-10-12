@@ -9,11 +9,11 @@
 </head>
 <body>
   <main id="login-screen" class="login-screen" hidden>
+    <div class="login-language"><select class="language-select" aria-label="Language"><option value="ja">日本語</option><option value="zh">中文</option><option value="en">English</option></select></div>
     <form id="login-form" class="login-card">
       <div class="brand-mark">G</div>
-      <p class="eyebrow">GUTS FLEET OPERATIONS</p>
+      
       <h1>車両配置ボード</h1>
-      <p class="muted">ログインして共有ボードを開きます。</p>
       <label>ユーザー名<input name="username" autocomplete="username" required maxlength="80"></label>
       <label>パスワード<input name="password" type="password" autocomplete="current-password" required></label>
       <button class="primary-button" type="submit">ログイン</button>
@@ -25,9 +25,10 @@
     <header class="topbar">
       <a class="brand" href="/" aria-label="Guts 車両配置ボード">
         <span class="brand-mark small">G</span>
-        <span><b>Guts 車両配置ボード</b><small>GUTS FLEET OPERATIONS · <span data-app-version></span></small></span>
+        <span><b>Guts 車両配置ボード</b><small data-app-version></small></span>
       </a>
       <div class="topbar-actions">
+        <select class="language-select" aria-label="Language"><option value="ja">日本語</option><option value="zh">中文</option><option value="en">English</option></select>
         <span id="connection-state" class="connection"><i></i>接続中</span>
         <span id="current-user" class="current-user"></span>
         <button id="logout-button" class="quiet-button">ログアウト</button>
@@ -35,7 +36,7 @@
     </header>
     <main class="page-content">
       <section class="page-heading">
-        <div><p class="eyebrow">LIVE FLEET OVERVIEW</p><h1>車両配置</h1><p class="muted">駐車場、貸出中エリア、予備、立駐はすべて同じ階層です。車両はどのエリアにも自由に移動できます。</p></div>
+        <div><h1>車両配置</h1></div>
         <div class="page-actions">
           <button id="manage-locations-button" class="primary-button">＋ 位置を管理</button>
           <button id="add-vehicle-button" class="primary-button">＋ 車両を追加</button>
@@ -50,7 +51,7 @@
       <section class="status-section">
         <details id="status-panel" open>
           <summary class="status-summary">
-            <span><p class="eyebrow">FOLLOW-UP</p><strong>ステータス別の車両</strong></span>
+            <span><strong>ステータス別の車両</strong></span>
             <span class="status-summary-actions"><span id="status-total" class="muted"></span><span class="status-toggle-icon" aria-hidden="true">⌄</span></span>
           </summary>
           <div class="status-panel-content">
@@ -66,7 +67,7 @@
       <section class="status-section job-section">
         <details id="job-panel" open>
           <summary class="status-summary">
-            <span><p class="eyebrow">DISPATCH</p><strong>ジョブ</strong></span>
+            <span><strong>ジョブ</strong></span>
             <span class="status-summary-actions"><span id="job-total" class="muted"></span><span class="status-toggle-icon" aria-hidden="true">⌄</span></span>
           </summary>
           <div class="status-panel-content">
@@ -89,7 +90,7 @@
   </div>
   <dialog id="vehicle-dialog" class="vehicle-dialog">
     <form id="vehicle-form" class="vehicle-form">
-      <div class="dialog-heading"><div><p class="eyebrow">FLEET DETAILS</p><h2 id="dialog-title">車両を追加</h2></div><button type="button" id="close-dialog" class="close-button" aria-label="閉じる">×</button></div>
+      <div class="dialog-heading"><div><h2 id="dialog-title">車両を追加</h2></div><button type="button" id="close-dialog" class="close-button" aria-label="閉じる">×</button></div>
       <input type="hidden" name="id">
       <label>ナンバー<input name="plate" required maxlength="40" placeholder="例: 品川 500 あ 1234"></label>
       <div class="form-row">
@@ -108,15 +109,14 @@
       </fieldset>
       <section class="assessment-section">
         <div class="assessment-section-heading">
-          <div><p class="eyebrow">VEHICLE CHECK</p><h3>車両状態評価シート</h3></div>
+          <div><h3>車両状態評価シート</h3></div>
           <button id="manage-assessment-button" class="quiet-button" type="button" hidden>評価項目・損傷種類を管理</button>
         </div>
         <div id="assessment-fields"></div>
         <label class="assessment-notes-field">備考欄<textarea name="notes" rows="4" maxlength="5000" placeholder="車両について共有したいことを記録できます。"></textarea></label>
       </section>
       <section class="inspection-section">
-        <div><p class="eyebrow">DAMAGE INSPECTION</p><h3>車体の損傷位置</h3></div>
-        <p class="muted">車体を指またはマウスでドラッグして360°回転できます。傷・凹みのアイコンを押したまま車体表面までドラッグすると記録します。</p>
+        <div><h3>車体の損傷位置</h3></div>
         <div id="damage-type-palette" class="damage-type-palette"></div>
         <p id="inspection-hint" class="inspection-hint" aria-live="polite"></p>
         <div id="inspection-car-view" class="inspection-car-view" role="application" aria-label="ドラッグで360度回転できる3D車両モデル">
@@ -132,10 +132,9 @@
   <dialog id="assessment-manager-dialog">
     <div class="assessment-manager">
       <div class="dialog-heading">
-        <div><p class="eyebrow">VEHICLE CHECK SETTINGS</p><h2>評価シートを管理</h2></div>
+        <div><h2>評価シートを管理</h2></div>
         <button type="button" id="close-assessment-manager" class="close-button" aria-label="閉じる">×</button>
       </div>
-      <p class="muted">設定はこの店舗で共有されます。項目を削除すると、保存済みの車両評価からも削除されます。</p>
       <h3>評価項目</h3>
       <div id="assessment-field-manager-list" class="assessment-manager-list"></div>
       <form id="add-assessment-field-form" class="add-assessment-field-form">
@@ -161,10 +160,9 @@
   <dialog id="status-dialog">
     <div class="status-form">
       <div class="dialog-heading">
-        <div><p class="eyebrow">FOLLOW-UP SETTINGS</p><h2>対応ステータスを管理</h2></div>
+        <div><h2>対応ステータスを管理</h2></div>
         <button type="button" id="close-status-dialog" class="close-button" aria-label="閉じる">×</button>
       </div>
-      <p class="muted">項目を削除すると、登録済み車両からもそのステータスが解除されます。</p>
       <div id="status-manager-list" class="status-manager-list"></div>
       <form id="add-status-form" class="add-status-form">
         <label>新しいステータス名<input name="name" required maxlength="40" placeholder="例：書類確認待ち"></label>
@@ -177,7 +175,7 @@
   <dialog id="job-dialog">
     <div class="status-form">
       <div class="dialog-heading">
-        <div><p class="eyebrow">DISPATCH SETTINGS</p><h2>ジョブ管理</h2></div>
+        <div><h2>ジョブ管理</h2></div>
         <button type="button" id="close-job-dialog" class="close-button" aria-label="閉じる">×</button>
       </div>
       <form id="add-job-form" class="add-job-form" autocomplete="off">
@@ -202,7 +200,6 @@
         </label>
         <button type="submit" class="primary-button">ジョブを追加</button>
       </form>
-      <p class="muted">完了したジョブは毎日0時に自動削除されます。未完了のジョブは下の一覧から手動で削除するまで残ります。</p>
       <div id="job-manager-list" class="status-manager-list"></div>
       <p id="job-error" class="error-message" role="alert"></p>
     </div>
@@ -210,10 +207,9 @@
   <dialog id="option-dialog">
     <div class="status-form">
       <div class="dialog-heading">
-        <div><p class="eyebrow">VEHICLE OPTIONS</p><h2>オプションを管理</h2></div>
+        <div><h2>オプションを管理</h2></div>
         <button type="button" id="close-option-dialog" class="close-button" aria-label="閉じる">×</button>
       </div>
-      <p class="muted">削除すると登録済み車両からも該当オプションを解除します。</p>
       <div id="option-manager-list" class="status-manager-list"></div>
       <form id="add-option-form" class="add-status-form">
         <label>新しいオプション名<input name="name" required maxlength="40" placeholder="例：ドラレコ"></label>
@@ -225,10 +221,9 @@
   <dialog id="location-dialog">
     <div class="location-form">
       <div class="dialog-heading">
-        <div><p class="eyebrow">PARKING LOCATIONS</p><h2>位置を管理</h2></div>
+        <div><h2>位置を管理</h2></div>
         <button type="button" id="close-location-dialog" class="close-button" aria-label="閉じる">×</button>
       </div>
-      <p class="muted">名前とGoogleマップのナビリンクを設定できます。名前を変えても、配置済みの車両はそのまま残ります。</p>
       <div id="location-list" class="location-list"></div>
       <form id="add-location-form" class="add-location-form">
         <label>新しい位置名<input name="name" required maxlength="40" placeholder="位置名"></label>
@@ -241,10 +236,9 @@
   <dialog id="franchise-dialog">
     <div class="franchise-form">
       <div class="dialog-heading">
-        <div><p class="eyebrow">FRANCHISE ACCOUNTS</p><h2>加盟店管理</h2></div>
+        <div><h2>加盟店管理</h2></div>
         <button type="button" id="close-franchise-dialog" class="close-button" aria-label="閉じる">×</button>
       </div>
-      <p class="muted">加盟店ごとに車両・位置データは分離されます。利用停止中は加盟店の全アカウントがログインできません。</p>
       <div id="franchise-list" class="franchise-list"></div>
       <form id="add-franchise-form" class="add-franchise-form">
         <label>加盟店名<input name="name" required maxlength="80" placeholder="例：〇〇店"></label>
@@ -256,6 +250,7 @@
     </div>
   </dialog>
   <script src="/static/id.js"></script>
+  <script src="/static/i18n.js"></script>
   <script src="/static/app.js" defer></script>
   <script type="module" src="/static/inspection3d.mjs"></script>
 </body>
