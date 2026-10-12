@@ -9,7 +9,7 @@ const signature = require("cookie-signature");
 const { rateLimit } = require("express-rate-limit");
 const { WebSocket, WebSocketServer } = require("ws");
 
-const { VEHICLE_OPTIONS, VEHICLE_TYPES, openDatabase } = require("./db");
+const { LOT_NAMES, VEHICLE_OPTIONS, VEHICLE_TYPES, openDatabase } = require("./db");
 const { SQLiteSessionStore } = require("./session-store");
 const { hashPassword, verifyPassword } = require("./security");
 
@@ -81,13 +81,20 @@ class RealtimeBoard {
     }
     this.db.prepare("DELETE FROM sessions WHERE expires <= ?").run(Date.now());
     const row = this.db.prepare("SELECT sess FROM sessions WHERE sid = ?").get(sessionId);
-    if (!row || !JSON.parse(row.sess).username) {
+    const username = row ? JSON.parse(row.sess).username : null;
+    const user = username && this.db.prepare(`
+      SELECT u.tenant_id, t.is_active
+      FROM users u JOIN tenants t ON t.id = u.tenant_id
+      WHERE u.username = ?
+    `).get(username);
+    if (!user || !user.is_active) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
     }
 
     this.webSocketServer.handleUpgrade(request, socket, head, (websocket) => {
+      websocket.tenantId = user.tenant_id;
       this.clients.add(websocket);
       websocket.on("close", () => this.clients.delete(websocket));
       websocket.on("error", () => this.clients.delete(websocket));
@@ -97,10 +104,18 @@ class RealtimeBoard {
     });
   }
 
-  notify() {
+  notify(tenantId) {
     const message = JSON.stringify({ type: "refresh" });
     for (const websocket of this.clients) {
-      if (websocket.readyState === WebSocket.OPEN) websocket.send(message);
+      if (websocket.tenantId === tenantId && websocket.readyState === WebSocket.OPEN) {
+        websocket.send(message);
+      }
+    }
+  }
+
+  closeTenant(tenantId) {
+    for (const websocket of this.clients) {
+      if (websocket.tenantId === tenantId) websocket.close(4003, "Store access suspended");
     }
   }
 }
@@ -119,6 +134,10 @@ function vehicleFromRow(row) {
 function parseVehicleId(value) {
   const id = Number(value);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+function isUniqueConstraint(error) {
+  return error.code === "SQLITE_CONSTRAINT_UNIQUE" || error.errcode === 2067;
 }
 
 function getNextPosition(db, lotId) {
@@ -147,6 +166,9 @@ function createApplication(options = {}) {
   const cookieSecure = options.cookieSecure ?? process.env.COOKIE_SECURE === "1";
   const erpApiKey = options.erpApiKey ?? process.env.ERP_API_KEY;
   const db = openDatabase(databasePath);
+  const headquarters = db.prepare("SELECT id FROM tenants WHERE is_headquarters = 1").get();
+  if (!headquarters) throw new Error("Headquarters tenant is missing.");
+  const headquartersId = headquarters.id;
   const sessionStore = new SQLiteSessionStore(db);
   const realtime = new RealtimeBoard(db, sessionSecret);
   const app = express();
@@ -178,15 +200,30 @@ function createApplication(options = {}) {
 
   function requireUser(request, response, next) {
     if (!request.session.username) return response.status(401).json({ detail: "Please sign in." });
-    const user = db.prepare("SELECT role FROM users WHERE username = ?").get(request.session.username);
+    const user = db.prepare(`
+      SELECT u.id, u.role, u.tenant_id, t.is_active, t.is_headquarters, t.name AS tenant_name
+      FROM users u JOIN tenants t ON t.id = u.tenant_id
+      WHERE u.username = ?
+    `).get(request.session.username);
     if (!user) return response.status(401).json({ detail: "Please sign in." });
-    request.session.role = user.role;
+    if (!user.is_active) {
+      return response.status(403).json({ detail: "この加盟店アカウントは一時停止中です。総本店へお問い合わせください。" });
+    }
+    request.user = user;
+    request.tenantId = user.tenant_id;
     next();
   }
 
   function requireAdmin(request, response, next) {
-    if (request.session.role !== "admin") {
+    if (request.user.role !== "admin") {
       return response.status(403).json({ detail: "Administrator permission is required." });
+    }
+    next();
+  }
+
+  function requireHeadquartersAdmin(request, response, next) {
+    if (request.user.role !== "admin" || !request.user.is_headquarters) {
+      return response.status(403).json({ detail: "Headquarters administrator permission is required." });
     }
     next();
   }
@@ -199,21 +236,28 @@ function createApplication(options = {}) {
     next();
   }
 
-  function validateLot(lotId) {
+  function validateLot(lotId, tenantId) {
     return lotId === null || lotId === undefined ||
-      Boolean(db.prepare("SELECT 1 FROM parking_lots WHERE id = ?").get(lotId));
+      Boolean(db.prepare("SELECT 1 FROM parking_lots WHERE id = ? AND tenant_id = ?").get(lotId, tenantId));
   }
 
   app.use("/static", express.static(STATIC_DIR));
   app.use(express.static(STATIC_DIR));
   app.get("/api/me", (request, response) => {
     if (!request.session.username) return response.json({ authenticated: false });
-    const user = db.prepare("SELECT role FROM users WHERE username = ?").get(request.session.username);
+    const user = db.prepare(`
+      SELECT u.role, u.tenant_id, t.name AS tenant_name, t.is_active, t.is_headquarters
+      FROM users u JOIN tenants t ON t.id = u.tenant_id
+      WHERE u.username = ?
+    `).get(request.session.username);
     if (!user) return response.json({ authenticated: false });
+    if (!user.is_active) return response.json({ authenticated: false, suspended: true });
     response.json({
       authenticated: true,
       username: request.session.username,
       can_manage: user.role === "admin",
+      can_manage_franchises: user.role === "admin" && Boolean(user.is_headquarters),
+      tenant_name: user.tenant_name,
     });
   });
 
@@ -235,20 +279,30 @@ function createApplication(options = {}) {
         ) {
           return response.status(422).json({ detail: "Valid username and password are required." });
         }
-        const row = db.prepare("SELECT password_hash, role FROM users WHERE username = ?").get(username.trim());
+        const row = db.prepare(`
+          SELECT u.password_hash, u.role, u.tenant_id, t.name AS tenant_name,
+                 t.is_active, t.is_headquarters
+          FROM users u JOIN tenants t ON t.id = u.tenant_id
+          WHERE u.username = ?
+        `).get(username.trim());
         const matches = await verifyPassword(password, row?.password_hash || DUMMY_PASSWORD_HASH);
         if (!row || !matches) {
           return response.status(401).json({ detail: "Username or password is incorrect." });
         }
+        if (!row.is_active) {
+          return response.status(403).json({ detail: "この加盟店アカウントは一時停止中です。総本店へお問い合わせください。" });
+        }
         request.session.regenerate((error) => {
           if (error) return next(error);
           request.session.username = username.trim();
-          request.session.role = row.role;
+          request.session.tenant_id = row.tenant_id;
           request.session.save((saveError) => {
             if (saveError) return next(saveError);
             response.json({
               username: request.session.username,
-              can_manage: request.session.role === "admin",
+              can_manage: row.role === "admin",
+              can_manage_franchises: row.role === "admin" && Boolean(row.is_headquarters),
+              tenant_name: row.tenant_name,
             });
           });
         });
@@ -268,15 +322,16 @@ function createApplication(options = {}) {
     });
   });
 
-  app.get("/api/bootstrap", requireUser, (_request, response) => {
+  app.get("/api/bootstrap", requireUser, (request, response) => {
     const parkingLots = db.prepare(
-      "SELECT id, name, display_order, area_height, area_width, navigation_url FROM parking_lots ORDER BY display_order, id",
-    ).all();
+      `SELECT id, name, display_order, area_height, area_width, navigation_url
+       FROM parking_lots WHERE tenant_id = ? ORDER BY display_order, id`,
+    ).all(request.tenantId);
     const vehicles = db.prepare(`
       SELECT id, external_id, plate, vehicle_type, parking_lot_id,
              position_x, position_y, unwashed, no_fuel, needs_repair, options
-      FROM vehicles ORDER BY plate, id
-    `).all().map(vehicleFromRow);
+      FROM vehicles WHERE tenant_id = ? ORDER BY plate, id
+    `).all(request.tenantId).map(vehicleFromRow);
     response.json({
       parking_lots: parkingLots,
       vehicles,
@@ -284,6 +339,100 @@ function createApplication(options = {}) {
       vehicle_options: VEHICLE_OPTIONS,
     });
   });
+
+  app.get("/api/franchises", requireUser, requireHeadquartersAdmin, (_request, response) => {
+    const stores = db.prepare(`
+      SELECT t.id, t.name, t.is_active, t.created_at,
+             group_concat(u.username, '、') AS admin_usernames
+      FROM tenants t
+      LEFT JOIN users u ON u.tenant_id = t.id AND u.role = 'admin'
+      WHERE t.is_headquarters = 0
+      GROUP BY t.id
+      ORDER BY t.created_at, t.id
+    `).all().map((store) => ({
+      ...store,
+      is_active: Boolean(store.is_active),
+      admin_usernames: store.admin_usernames || "",
+    }));
+    response.json({ franchises: stores });
+  });
+
+  app.post("/api/franchises", requireUser, requireHeadquartersAdmin, requireSameOrigin, async (request, response, next) => {
+    const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
+    const username = typeof request.body?.username === "string" ? request.body.username.trim() : "";
+    const password = request.body?.password;
+    if (!name || name.length > 80 || !username || username.length > 80 ||
+        typeof password !== "string" || password.length < 12 || password.length > 1024) {
+      return response.status(422).json({
+        detail: "店舗名・アカウント名は1〜80文字、パスワードは12〜1024文字で入力してください。",
+      });
+    }
+    if (db.prepare("SELECT 1 FROM tenants WHERE name = ? COLLATE NOCASE").get(name) ||
+        db.prepare("SELECT 1 FROM users WHERE username = ? COLLATE NOCASE").get(username)) {
+      return response.status(409).json({ detail: "店舗名またはアカウント名は既に使用されています。" });
+    }
+    try {
+      const passwordHash = await hashPassword(password);
+      db.exec("BEGIN IMMEDIATE");
+      let tenantId;
+      try {
+        const tenantResult = db.prepare(
+          "INSERT INTO tenants (name, is_headquarters, is_active) VALUES (?, 0, 1)",
+        ).run(name);
+        tenantId = Number(tenantResult.lastInsertRowid);
+        db.prepare(`
+          INSERT INTO users (username, password_hash, role, tenant_id)
+          VALUES (?, ?, 'admin', ?)
+        `).run(username, passwordHash, tenantId);
+        const addLot = db.prepare(`
+          INSERT INTO parking_lots (tenant_id, name, display_order, area_height, area_width)
+          VALUES (?, ?, ?, 210, 50)
+        `);
+        LOT_NAMES.forEach((lotName, index) => addLot.run(tenantId, lotName, index));
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      realtime.notify(request.tenantId);
+      response.status(201).json({
+        franchise: { id: tenantId, name, is_active: true, admin_usernames: username },
+      });
+    } catch (error) {
+      if (isUniqueConstraint(error)) {
+        return response.status(409).json({ detail: "店舗名またはアカウント名は既に使用されています。" });
+      }
+      next(error);
+    }
+  });
+
+  app.patch(
+    "/api/franchises/:id/status",
+    requireUser,
+    requireHeadquartersAdmin,
+    requireSameOrigin,
+    (request, response, next) => {
+      const tenantId = parseVehicleId(request.params.id);
+      if (tenantId === null || typeof request.body?.is_active !== "boolean") {
+        return response.status(422).json({ detail: "有効・停止の状態を指定してください。" });
+      }
+      const store = db.prepare(`
+        SELECT id, name, is_active FROM tenants
+        WHERE id = ? AND is_headquarters = 0
+      `).get(tenantId);
+      if (!store) return response.status(404).json({ detail: "加盟店が見つかりません。" });
+      try {
+        db.prepare("UPDATE tenants SET is_active = ? WHERE id = ?")
+          .run(Number(request.body.is_active), tenantId);
+        if (request.body.is_active) realtime.notify(tenantId);
+        else realtime.closeTenant(tenantId);
+        realtime.notify(request.tenantId);
+        response.json({ ...store, is_active: request.body.is_active });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   app.post("/api/parking-lots", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
     const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
@@ -295,20 +444,22 @@ function createApplication(options = {}) {
     if (navigationUrl !== "" && !isGoogleMapsUrl(navigationUrl)) {
       return response.status(422).json({ detail: "Navigation link must be a valid HTTPS Google Maps URL." });
     }
-    if (db.prepare("SELECT 1 FROM parking_lots WHERE name = ? COLLATE NOCASE").get(name)) {
+    if (db.prepare("SELECT 1 FROM parking_lots WHERE tenant_id = ? AND name = ? COLLATE NOCASE")
+      .get(request.tenantId, name)) {
       return response.status(409).json({ detail: "A parking location with that name already exists." });
     }
     try {
       const result = db.prepare(`
-        INSERT INTO parking_lots (name, display_order, area_height, area_width, navigation_url)
-        VALUES (?, (SELECT COALESCE(MAX(display_order), -1) + 1 FROM parking_lots), 210, 50, ?)
-      `).run(name, navigationUrl);
-      realtime.notify();
+        INSERT INTO parking_lots (tenant_id, name, display_order, area_height, area_width, navigation_url)
+        VALUES (?, ?, (SELECT COALESCE(MAX(display_order), -1) + 1 FROM parking_lots WHERE tenant_id = ?), 210, 50, ?)
+      `).run(request.tenantId, name, request.tenantId, navigationUrl);
+      realtime.notify(request.tenantId);
       response.status(201).json(db.prepare(
-        "SELECT id, name, display_order, area_height, area_width, navigation_url FROM parking_lots WHERE id = ?",
-      ).get(result.lastInsertRowid));
+        `SELECT id, name, display_order, area_height, area_width, navigation_url
+         FROM parking_lots WHERE id = ? AND tenant_id = ?`,
+      ).get(result.lastInsertRowid, request.tenantId));
     } catch (error) {
-      if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
+      if (isUniqueConstraint(error)) {
         return response.status(409).json({ detail: "A parking location with that name already exists." });
       }
       next(error);
@@ -318,7 +469,9 @@ function createApplication(options = {}) {
   app.patch("/api/parking-lots/:id", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
     try {
       const lotId = parseVehicleId(request.params.id);
-      const lot = lotId === null ? null : db.prepare("SELECT * FROM parking_lots WHERE id = ?").get(lotId);
+      const lot = lotId === null ? null : db.prepare(
+        "SELECT * FROM parking_lots WHERE id = ? AND tenant_id = ?",
+      ).get(lotId, request.tenantId);
       if (!lot) return response.status(404).json({ detail: "Parking lot not found." });
       const body = request.body || {};
       const entries = Object.entries(body);
@@ -338,7 +491,8 @@ function createApplication(options = {}) {
         return response.status(422).json({ detail: "Parking location name must be between 1 and 40 characters." });
       }
       if (name !== undefined &&
-          db.prepare("SELECT 1 FROM parking_lots WHERE name = ? COLLATE NOCASE AND id != ?").get(name, lotId)) {
+          db.prepare("SELECT 1 FROM parking_lots WHERE tenant_id = ? AND name = ? COLLATE NOCASE AND id != ?")
+            .get(request.tenantId, name, lotId)) {
         return response.status(409).json({ detail: "A parking location with that name already exists." });
       }
       if (navigationUrl !== undefined && navigationUrl !== "" && !isGoogleMapsUrl(navigationUrl)) {
@@ -354,14 +508,15 @@ function createApplication(options = {}) {
       if (name !== undefined) values.name = name;
       if (navigationUrl !== undefined) values.navigation_url = navigationUrl;
       const assignments = Object.keys(values).map((key) => `${key} = ?`).join(", ");
-      db.prepare(`UPDATE parking_lots SET ${assignments} WHERE id = ?`)
-        .run(...Object.values(values), lotId);
-      realtime.notify();
+      db.prepare(`UPDATE parking_lots SET ${assignments} WHERE id = ? AND tenant_id = ?`)
+        .run(...Object.values(values), lotId, request.tenantId);
+      realtime.notify(request.tenantId);
       response.json(db.prepare(
-        "SELECT id, name, display_order, area_height, area_width, navigation_url FROM parking_lots WHERE id = ?",
-      ).get(lotId));
+        `SELECT id, name, display_order, area_height, area_width, navigation_url
+         FROM parking_lots WHERE id = ? AND tenant_id = ?`,
+      ).get(lotId, request.tenantId));
     } catch (error) {
-      if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
+      if (isUniqueConstraint(error)) {
         return response.status(409).json({ detail: "A parking location with that name already exists." });
       }
       next(error);
@@ -370,7 +525,8 @@ function createApplication(options = {}) {
 
   app.put("/api/parking-lots/order", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
     const { ids } = request.body || {};
-    const actualIds = db.prepare("SELECT id FROM parking_lots").all().map((lot) => lot.id).sort((a, b) => a - b);
+    const actualIds = db.prepare("SELECT id FROM parking_lots WHERE tenant_id = ?")
+      .all(request.tenantId).map((lot) => lot.id).sort((a, b) => a - b);
     if (!Array.isArray(ids) || ids.length !== actualIds.length ||
         ids.some((id) => !Number.isInteger(id)) ||
         [...ids].sort((a, b) => a - b).some((id, index) => id !== actualIds[index])) {
@@ -378,10 +534,12 @@ function createApplication(options = {}) {
     }
     try {
       db.exec("BEGIN IMMEDIATE");
-      const updateOrder = db.prepare("UPDATE parking_lots SET display_order = ? WHERE id = ?");
-      ids.forEach((id, index) => updateOrder.run(index, id));
+      const updateOrder = db.prepare(
+        "UPDATE parking_lots SET display_order = ? WHERE id = ? AND tenant_id = ?",
+      );
+      ids.forEach((id, index) => updateOrder.run(index, id, request.tenantId));
       db.exec("COMMIT");
-      realtime.notify();
+      realtime.notify(request.tenantId);
       response.json({ ids });
     } catch (error) {
       if (db.isTransaction) db.exec("ROLLBACK");
@@ -399,9 +557,10 @@ function createApplication(options = {}) {
       ) {
         return response.status(422).json({ detail: "Valid plate and vehicle type are required." });
       }
-      const reserveLotId = db.prepare("SELECT id FROM parking_lots WHERE name = '予備'").get()?.id;
+      const reserveLotId = db.prepare("SELECT id FROM parking_lots WHERE tenant_id = ? AND name = '予備'")
+        .get(request.tenantId)?.id;
       const lotId = body.parking_lot_id ?? reserveLotId;
-      if (!Number.isInteger(lotId) || !validateLot(lotId)) {
+      if (!Number.isInteger(lotId) || !validateLot(lotId, request.tenantId)) {
         return response.status(422).json({ detail: "Unknown parking lot." });
       }
       const hasX = Object.hasOwn(body, "position_x");
@@ -427,15 +586,17 @@ function createApplication(options = {}) {
       const result = db.prepare(`
         INSERT INTO vehicles
           (plate, vehicle_type, parking_lot_id, position_x, position_y,
-           unwashed, no_fuel, needs_repair, options)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           unwashed, no_fuel, needs_repair, options, tenant_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         plate.trim(), vehicleType.trim(), lotId ?? null, position.positionX, position.positionY,
         Number(body.unwashed === true), Number(body.no_fuel === true),
-        Number(body.needs_repair === true), JSON.stringify(options),
+        Number(body.needs_repair === true), JSON.stringify(options), request.tenantId,
       );
-      realtime.notify();
-      response.status(201).json(vehicleFromRow(db.prepare("SELECT * FROM vehicles WHERE id = ?").get(result.lastInsertRowid)));
+      realtime.notify(request.tenantId);
+      response.status(201).json(vehicleFromRow(db.prepare(
+        "SELECT * FROM vehicles WHERE id = ? AND tenant_id = ?",
+      ).get(result.lastInsertRowid, request.tenantId)));
     } catch (error) {
       if (error.code === "SQLITE_CONSTRAINT_CHECK") {
         return response.status(422).json({ detail: "Invalid vehicle data." });
@@ -448,6 +609,9 @@ function createApplication(options = {}) {
     try {
       const vehicleId = parseVehicleId(request.params.id);
       if (vehicleId === null) return response.status(404).json({ detail: "Vehicle not found." });
+      const existingVehicle = db.prepare("SELECT id FROM vehicles WHERE id = ? AND tenant_id = ?")
+        .get(vehicleId, request.tenantId);
+      if (!existingVehicle) return response.status(404).json({ detail: "Vehicle not found." });
       const allowed = new Set([
         "plate", "vehicle_type", "parking_lot_id", "position_x", "position_y",
         "options", ...STATUSES,
@@ -482,10 +646,11 @@ function createApplication(options = {}) {
         return response.status(422).json({ detail: "Vehicle coordinates must be between 0 and 1." });
       }
       if (Object.hasOwn(data, "parking_lot_id") && data.parking_lot_id === null) {
-        data.parking_lot_id = db.prepare("SELECT id FROM parking_lots WHERE name = '予備'").get().id;
+        data.parking_lot_id = db.prepare("SELECT id FROM parking_lots WHERE tenant_id = ? AND name = '予備'")
+          .get(request.tenantId).id;
       }
       if (Object.hasOwn(data, "parking_lot_id") &&
-          (!Number.isInteger(data.parking_lot_id) || !validateLot(data.parking_lot_id))) {
+          (!Number.isInteger(data.parking_lot_id) || !validateLot(data.parking_lot_id, request.tenantId))) {
         return response.status(422).json({ detail: "Unknown parking lot." });
       }
       if (STATUSES.some((field) => Object.hasOwn(data, field) && typeof data[field] !== "boolean")) {
@@ -503,11 +668,13 @@ function createApplication(options = {}) {
         if (Object.hasOwn(data, field)) data[field] = Number(data[field]);
       }
       const assignments = Object.keys(data).map((field) => `${field} = ?`).join(", ");
-      const result = db.prepare(`UPDATE vehicles SET ${assignments} WHERE id = ?`)
-        .run(...Object.values(data), vehicleId);
+      const result = db.prepare(`UPDATE vehicles SET ${assignments} WHERE id = ? AND tenant_id = ?`)
+        .run(...Object.values(data), vehicleId, request.tenantId);
       if (!result.changes) return response.status(404).json({ detail: "Vehicle not found." });
-      realtime.notify();
-      response.json(vehicleFromRow(db.prepare("SELECT * FROM vehicles WHERE id = ?").get(vehicleId)));
+      realtime.notify(request.tenantId);
+      response.json(vehicleFromRow(db.prepare(
+        "SELECT * FROM vehicles WHERE id = ? AND tenant_id = ?",
+      ).get(vehicleId, request.tenantId)));
     } catch (error) {
       next(error);
     }
@@ -516,9 +683,10 @@ function createApplication(options = {}) {
   app.delete("/api/vehicles/:id", requireUser, requireAdmin, requireSameOrigin, (request, response) => {
     const vehicleId = parseVehicleId(request.params.id);
     if (vehicleId === null) return response.status(404).json({ detail: "Vehicle not found." });
-    const result = db.prepare("DELETE FROM vehicles WHERE id = ?").run(vehicleId);
+    const result = db.prepare("DELETE FROM vehicles WHERE id = ? AND tenant_id = ?")
+      .run(vehicleId, request.tenantId);
     if (!result.changes) return response.status(404).json({ detail: "Vehicle not found." });
-    realtime.notify();
+    realtime.notify(request.tenantId);
     response.status(204).end();
   });
 
@@ -542,34 +710,39 @@ function createApplication(options = {}) {
           !VEHICLE_TYPES.includes(vehicle.vehicle_type)
         ) return response.status(422).json({ detail: "Each vehicle requires external_id, plate, and vehicle_type." });
         if (vehicle.parking_lot_id != null &&
-            (!Number.isInteger(vehicle.parking_lot_id) || !validateLot(vehicle.parking_lot_id))) {
+            (!Number.isInteger(vehicle.parking_lot_id) || !validateLot(vehicle.parking_lot_id, headquartersId))) {
           return response.status(422).json({ detail: "Unknown parking lot." });
         }
       }
-      const existing = db.prepare("SELECT id FROM vehicles WHERE external_id = ?");
+      const existing = db.prepare("SELECT id FROM vehicles WHERE tenant_id = ? AND external_id = ?");
       const update = db.prepare(`
         UPDATE vehicles
         SET plate = ?, vehicle_type = ?, parking_lot_id = COALESCE(?, parking_lot_id)
-        WHERE external_id = ?
+        WHERE tenant_id = ? AND external_id = ?
       `);
       const insert = db.prepare(`
         INSERT INTO vehicles
-          (external_id, plate, vehicle_type, parking_lot_id, position_x, position_y)
-        VALUES (?, ?, ?, ?, ?, ?)
+          (external_id, plate, vehicle_type, parking_lot_id, position_x, position_y, tenant_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
       db.exec("BEGIN IMMEDIATE");
       try {
         for (const vehicle of payload) {
           const externalId = vehicle.external_id.trim();
-          if (existing.get(externalId)) {
-            update.run(vehicle.plate.trim(), vehicle.vehicle_type.trim(), vehicle.parking_lot_id ?? null, externalId);
+          if (existing.get(headquartersId, externalId)) {
+            update.run(
+              vehicle.plate.trim(), vehicle.vehicle_type.trim(), vehicle.parking_lot_id ?? null,
+              headquartersId, externalId,
+            );
           } else {
-            const reserveLotId = db.prepare("SELECT id FROM parking_lots WHERE name = '予備'").get().id;
+            const reserveLotId = db.prepare(
+              "SELECT id FROM parking_lots WHERE tenant_id = ? AND name = '予備'",
+            ).get(headquartersId).id;
             const lotId = vehicle.parking_lot_id ?? reserveLotId;
             const position = getNextPosition(db, lotId);
             insert.run(
               externalId, vehicle.plate.trim(), vehicle.vehicle_type.trim(),
-              lotId, position.positionX, position.positionY,
+              lotId, position.positionX, position.positionY, headquartersId,
             );
           }
         }
@@ -578,7 +751,7 @@ function createApplication(options = {}) {
         db.exec("ROLLBACK");
         throw error;
       }
-      if (payload.length) realtime.notify();
+      if (payload.length) realtime.notify(headquartersId);
       response.json({ synced: payload.length });
     } catch (error) {
       next(error);

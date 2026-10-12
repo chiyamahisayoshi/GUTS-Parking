@@ -3,8 +3,8 @@ const fs = require("node:fs");
 const { once } = require("node:events");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { after, before, test } = require("node:test");
-const { DatabaseSync } = require("node:sqlite");
 const { WebSocket } = require("ws");
 const request = require("supertest");
 
@@ -26,7 +26,7 @@ before(async () => {
     databasePath: ":memory:",
     sessionSecret: "test-only-session-secret-value-123456",
   });
-  application.db.prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)").run(
+  application.db.prepare("INSERT INTO users (username, password_hash, tenant_id) VALUES (?, ?, 1)").run(
     "operator",
     await hashPassword("correct-horse-battery"),
   );
@@ -90,6 +90,8 @@ test("logs in with hashed credentials and seeds thirteen peer locations", async 
     authenticated: true,
     username: "operator",
     can_manage: true,
+    can_manage_franchises: true,
+    tenant_name: "本店",
   });
   assert.equal(login.body.can_manage, true);
   const bootstrap = await agent.get("/api/bootstrap");
@@ -142,7 +144,7 @@ test("creates vehicles in separate positions and validates updates", async () =>
 });
 
 test("operator accounts can use the board but cannot add vehicles or manage locations", async () => {
-  application.db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)").run(
+  application.db.prepare("INSERT INTO users (username, password_hash, role, tenant_id) VALUES (?, ?, ?, 1)").run(
     "staff",
     await hashPassword("staff-password-strong"),
     "operator",
@@ -158,6 +160,8 @@ test("operator accounts can use the board but cannot add vehicles or manage loca
     authenticated: true,
     username: "staff",
     can_manage: false,
+    can_manage_franchises: false,
+    tenant_name: "本店",
   });
   assert.equal((await staffAgent.get("/api/bootstrap")).status, 200);
   assert.equal((await staffAgent.post("/api/vehicles").send({
@@ -173,6 +177,96 @@ test("operator accounts can use the board but cannot add vehicles or manage loca
   const updated = await staffAgent.patch(`/api/vehicles/${vehicleId}`).send({ no_fuel: true });
   assert.equal(updated.status, 200);
   assert.equal(updated.body.no_fuel, true);
+});
+
+test("headquarters can create isolated franchise stores and suspend or restore access", async () => {
+  assert.equal((await agent.post("/api/franchises").send({
+    name: "東店",
+    username: "east-admin",
+    password: "franchise-password-strong",
+  })).status, 201);
+  const franchise = (await agent.get("/api/franchises")).body.franchises.find((store) => store.name === "東店");
+  assert.ok(franchise);
+  assert.equal(franchise.is_active, true);
+  assert.equal(franchise.admin_usernames, "east-admin");
+  assert.equal((await agent.post("/api/franchises").send({
+    name: "東店",
+    username: "east-admin-2",
+    password: "franchise-password-strong",
+  })).status, 409);
+  assert.equal((await agent.post("/api/franchises").send({
+    name: "短密碼店",
+    username: "short-password",
+    password: "short",
+  })).status, 422);
+
+  const franchiseAgent = request.agent(server);
+  const login = await franchiseAgent.post("/api/login").send({
+    username: "east-admin",
+    password: "franchise-password-strong",
+  });
+  assert.equal(login.status, 200);
+  assert.equal(login.body.tenant_name, "東店");
+  assert.equal(login.body.can_manage, true);
+  assert.equal(login.body.can_manage_franchises, false);
+  const franchiseCookie = login.headers["set-cookie"][0].split(";")[0];
+  const headquartersBoard = (await agent.get("/api/bootstrap")).body;
+  const franchiseBoard = (await franchiseAgent.get("/api/bootstrap")).body;
+  assert.equal(headquartersBoard.parking_lots.length, 13);
+  assert.equal(franchiseBoard.parking_lots.length, 13);
+  assert.equal(new Set(franchiseBoard.parking_lots.map((lot) => lot.name)).size, 13);
+  assert.equal(franchiseBoard.vehicles.length, 0);
+  assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
+    parking_lot_id: franchiseBoard.parking_lots[0].id,
+  })).status, 422);
+
+  const franchiseVehicle = await franchiseAgent.post("/api/vehicles").send({
+    plate: "東店 500 あ 0001",
+    vehicle_type: "A-1",
+  });
+  assert.equal(franchiseVehicle.status, 201);
+  assert.equal((await agent.patch(`/api/vehicles/${franchiseVehicle.body.id}`).send({ no_fuel: true })).status, 404);
+  assert.equal((await franchiseAgent.patch(`/api/vehicles/${vehicleId}`).send({ no_fuel: true })).status, 404);
+  assert.equal((await franchiseAgent.delete(`/api/vehicles/${vehicleId}`)).status, 404);
+  assert.equal((await franchiseAgent.get("/api/franchises")).status, 403);
+  assert.equal(
+    (await agent.get("/api/bootstrap")).body.vehicles.some((vehicle) => vehicle.plate === "東店 500 あ 0001"),
+    false,
+  );
+
+  const headquartersSocket = new WebSocket(`${baseUrl.replace("http", "ws")}/ws`, {
+    headers: { Cookie: sessionCookie, Origin: baseUrl },
+  });
+  const franchiseSocket = new WebSocket(`${baseUrl.replace("http", "ws")}/ws`, {
+    headers: { Cookie: franchiseCookie, Origin: baseUrl },
+  });
+  await Promise.all([once(headquartersSocket, "open"), once(franchiseSocket, "open")]);
+  const headquartersUnexpectedMessage = new Promise((resolve) =>
+    headquartersSocket.once("message", () => resolve("message")));
+  const franchiseMessage = once(franchiseSocket, "message");
+  await franchiseAgent.patch(`/api/vehicles/${franchiseVehicle.body.id}`).send({ no_fuel: true });
+  assert.deepEqual(JSON.parse((await franchiseMessage)[0].toString()), { type: "refresh" });
+  assert.equal(await Promise.race([
+    headquartersUnexpectedMessage,
+    new Promise((resolve) => setTimeout(() => resolve("quiet"), 50)),
+  ]), "quiet");
+
+  const franchiseSocketClosed = once(franchiseSocket, "close");
+  const suspended = await agent.patch(`/api/franchises/${franchise.id}/status`).send({ is_active: false });
+  assert.equal(suspended.status, 200);
+  assert.equal(suspended.body.is_active, false);
+  const [suspensionCode] = await franchiseSocketClosed;
+  assert.equal(suspensionCode, 4003);
+  assert.equal((await franchiseAgent.get("/api/bootstrap")).status, 403);
+  assert.equal((await request(server).post("/api/login").send({
+    username: "east-admin",
+    password: "franchise-password-strong",
+  })).status, 403);
+  assert.equal((await agent.patch(`/api/franchises/${franchise.id}/status`).send({ is_active: true })).status, 200);
+  assert.equal((await franchiseAgent.get("/api/bootstrap")).status, 200);
+  const headquartersSocketClosed = once(headquartersSocket, "close");
+  headquartersSocket.close();
+  await headquartersSocketClosed;
 });
 
 test("rejects cross-origin changes and broadcasts edits only to authenticated websockets", async () => {
@@ -301,7 +395,7 @@ test("password hashes are unique, verifiable, and reject short passwords", async
 
 test("deletes a vehicle and reports missing ids", async () => {
   const staffAgent = request.agent(server);
-  application.db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)").run(
+  application.db.prepare("INSERT INTO users (username, password_hash, role, tenant_id) VALUES (?, ?, ?, 1)").run(
     "delete-test-staff",
     await hashPassword("staff-delete-test-password"),
     "operator",
@@ -450,8 +544,7 @@ test("adds locations and renames them without moving their vehicles", async () =
 test("flattens previous board sections into peer locations without losing vehicle data", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rentalcar-migration-"));
   const databasePath = path.join(directory, "legacy.db");
-  const legacy = new DatabaseSync(databasePath);
-  legacy.exec(`
+  const legacySchema = `
     CREATE TABLE parking_lots (
       id INTEGER PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
@@ -479,28 +572,39 @@ test("flattens previous board sections into peer locations without losing vehicl
       board_section TEXT NOT NULL DEFAULT '予備',
       options TEXT NOT NULL DEFAULT '[]'
     )
-  `);
-  for (let index = 1; index <= 9; index += 1) {
-    legacy.prepare("INSERT INTO parking_lots (name, display_order) VALUES (?, ?)").run(`駐車場 ${index}`, index - 1);
-  }
-  legacy.prepare("UPDATE parking_lots SET area_width = 2 WHERE id = 7").run();
-  legacy.prepare(`
-    INSERT INTO vehicles
-      (plate, vehicle_type, parking_lot_id, position_x, position_y, unwashed, no_fuel,
-       needs_repair, board_section, options)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run("旧データ", "hybrid", 4, 0.37, 0.62, 1, 0, 1, "駅前店貸出中", '["ETC"]');
-  legacy.close();
-  try {
-    const migrated = require("../app/db").openDatabase(databasePath);
+  `;
+  const migrationScript = `
+    const assert = require("node:assert/strict");
+    const { DatabaseSync } = require("node:sqlite");
+    const { openDatabase } = require(${JSON.stringify(require.resolve("../app/db"))});
+    const databasePath = ${JSON.stringify(databasePath)};
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(${JSON.stringify(legacySchema)});
+    for (let index = 1; index <= 9; index += 1) {
+      legacy.prepare("INSERT INTO parking_lots (name, display_order) VALUES (?, ?)")
+        .run(\`駐車場 \${index}\`, index - 1);
+    }
+    legacy.prepare("UPDATE parking_lots SET area_width = 2 WHERE id = 7").run();
+    legacy.prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)")
+      .run("legacy-admin", "legacy-hash");
+    legacy.prepare(\`
+      INSERT INTO vehicles
+        (plate, vehicle_type, parking_lot_id, position_x, position_y, unwashed, no_fuel,
+         needs_repair, board_section, options)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    \`).run("旧データ", "hybrid", 4, 0.37, 0.62, 1, 0, 1, "駅前店貸出中", '["ETC"]');
+    legacy.close();
+
+    const migrated = openDatabase(databasePath);
     const vehicle = migrated.prepare("SELECT * FROM vehicles WHERE plate = ?").get("旧データ");
     assert.equal(vehicle.vehicle_type, "A-2");
-    assert.equal(vehicle.board_section, "駅前店貸出中");
-    assert.equal(
-      vehicle.parking_lot_id,
-      migrated.prepare("SELECT id FROM parking_lots WHERE name = '駅前店貸出中'").get().id,
+    assert.equal(Object.hasOwn(vehicle, "board_section"), false);
+    assert.equal(vehicle.parking_lot_id,
+      migrated.prepare("SELECT id FROM parking_lots WHERE name = '駅前店貸出中'").get().id);
+    assert.deepEqual(
+      [vehicle.position_x, vehicle.position_y, vehicle.unwashed, vehicle.needs_repair],
+      [0.37, 0.62, 1, 1],
     );
-    assert.deepEqual([vehicle.position_x, vehicle.position_y, vehicle.unwashed, vehicle.needs_repair], [0.37, 0.62, 1, 1]);
     assert.deepEqual(JSON.parse(vehicle.options), ["ETC"]);
     assert.equal(migrated.prepare("SELECT COUNT(*) AS count FROM parking_lots").get().count, 13);
     const lot = migrated.prepare("SELECT * FROM parking_lots WHERE id = 4").get();
@@ -508,8 +612,24 @@ test("flattens previous board sections into peer locations without losing vehicl
     assert.equal(lot.navigation_url, "");
     assert.equal(migrated.prepare("PRAGMA table_info(users)").all().find((column) =>
       column.name === "role").dflt_value, "'admin'");
+    assert.deepEqual(
+      { ...migrated.prepare("SELECT role, tenant_id FROM users WHERE username = 'legacy-admin'").get() },
+      { role: "admin", tenant_id: 1 },
+    );
+    assert.deepEqual(migrated.prepare("PRAGMA foreign_key_check").all(), []);
     assert.equal(migrated.prepare("SELECT area_width FROM parking_lots WHERE id = 7").get().area_width, 100);
     migrated.close();
+
+    const reopened = openDatabase(databasePath);
+    assert.equal(reopened.prepare("SELECT COUNT(*) AS count FROM tenants").get().count, 1);
+    assert.equal(reopened.prepare("SELECT COUNT(*) AS count FROM parking_lots").get().count, 13);
+    assert.equal(reopened.prepare("SELECT COUNT(*) AS count FROM vehicles WHERE plate = '旧データ'").get().count, 1);
+    assert.deepEqual(reopened.prepare("PRAGMA foreign_key_check").all(), []);
+    reopened.close();
+  `;
+  try {
+    const result = spawnSync(process.execPath, ["-e", migrationScript], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

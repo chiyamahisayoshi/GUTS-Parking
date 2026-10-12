@@ -9,6 +9,8 @@
   const formError = document.querySelector("#form-error");
   const locationDialog = document.querySelector("#location-dialog");
   const locationError = document.querySelector("#location-error");
+  const franchiseDialog = document.querySelector("#franchise-dialog");
+  const franchiseError = document.querySelector("#franchise-error");
   const statuses = ["unwashed", "no_fuel", "needs_repair"];
   const statusLabels = { unwashed: "洗車待ち", no_fuel: "給油待ち", needs_repair: "要修理" };
   const statusIcons = { unwashed: "🫧", no_fuel: "⛽", needs_repair: "🔧" };
@@ -16,6 +18,7 @@
   let vehicles = [];
   let vehicleTypes = [];
   let canManage = false;
+  let canManageFranchises = false;
   let activeVehicleType = "all";
   let activeStatus = "all";
   let socket;
@@ -29,8 +32,13 @@
       headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     });
     if (!response.ok) {
-      if (response.status === 401 && path !== "/api/login") showLogin();
       const body = await response.json().catch(() => ({}));
+      if (response.status === 401 && path !== "/api/login") showLogin();
+      if (response.status === 403 &&
+          body.detail === "この加盟店アカウントは一時停止中です。総本店へお問い合わせください。") {
+        loginError.textContent = body.detail;
+        showLogin();
+      }
       throw new Error(body.detail || `Request failed (${response.status})`);
     }
     return response.status === 204 ? null : response.json();
@@ -42,13 +50,15 @@
     if (socket) socket.close();
   }
 
-  function showBoard(username, userCanManage) {
+  function showBoard(username, userCanManage, userCanManageFranchises, tenantName) {
     loginScreen.hidden = true;
     appScreen.hidden = false;
     canManage = userCanManage;
-    document.querySelector("#current-user").textContent = username;
+    canManageFranchises = userCanManageFranchises;
+    document.querySelector("#current-user").textContent = `${tenantName} · ${username}`;
     document.querySelector("#manage-locations-button").hidden = !canManage;
     document.querySelector("#add-vehicle-button").hidden = !canManage;
+    document.querySelector("#manage-franchises-button").hidden = !canManageFranchises;
     connectSocket();
     loadBoard().catch(showError);
   }
@@ -540,6 +550,62 @@
     locationDialog.showModal();
   }
 
+  async function loadFranchises() {
+    const result = await api("/api/franchises");
+    const list = document.querySelector("#franchise-list");
+    list.replaceChildren();
+    if (!result.franchises.length) {
+      const empty = document.createElement("p");
+      empty.className = "status-empty";
+      empty.textContent = "加盟店はまだ登録されていません。";
+      list.append(empty);
+      return;
+    }
+    for (const franchise of result.franchises) {
+      const row = document.createElement("div");
+      row.className = "franchise-row";
+      const details = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = franchise.name;
+      const account = document.createElement("span");
+      account.textContent = `管理者：${franchise.admin_usernames || "未登録"}`;
+      const state = document.createElement("span");
+      state.className = franchise.is_active ? "franchise-active" : "franchise-suspended";
+      state.textContent = franchise.is_active ? "利用中" : "利用停止中";
+      details.append(name, account, state);
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = franchise.is_active ? "danger-button" : "primary-button";
+      toggle.textContent = franchise.is_active ? "利用停止" : "利用再開";
+      toggle.addEventListener("click", async () => {
+        franchiseError.textContent = "";
+        toggle.disabled = true;
+        try {
+          await api(`/api/franchises/${franchise.id}/status`, {
+            method: "PATCH",
+            body: JSON.stringify({ is_active: !franchise.is_active }),
+          });
+          await loadFranchises();
+        } catch (error) {
+          franchiseError.textContent = error.message;
+        } finally {
+          toggle.disabled = false;
+        }
+      });
+      row.append(details, toggle);
+      list.append(row);
+    }
+  }
+
+  function openFranchiseManager() {
+    if (!canManageFranchises) return;
+    franchiseError.textContent = "";
+    loadFranchises().catch((error) => {
+      franchiseError.textContent = error.message;
+    });
+    franchiseDialog.showModal();
+  }
+
   function openVehicle(vehicle = null) {
     if (!vehicle && !canManage) return;
     vehicleForm.reset();
@@ -562,8 +628,13 @@
     socket = new WebSocket(`${scheme}//${location.host}/ws`);
     socket.addEventListener("open", () => setConnection(true));
     socket.addEventListener("message", () => loadBoard().catch(showError));
-    socket.addEventListener("close", () => {
+    socket.addEventListener("close", (event) => {
       setConnection(false);
+      if (event.code === 4003) {
+        loginError.textContent = "この加盟店アカウントは一時停止中です。総本店へお問い合わせください。";
+        showLogin();
+        return;
+      }
       if (!appScreen.hidden) window.setTimeout(connectSocket, 2000);
     });
     socket.addEventListener("error", () => socket.close());
@@ -585,7 +656,12 @@
         body: JSON.stringify({ username: form.get("username"), password: form.get("password") }),
       });
       loginForm.reset();
-      showBoard(result.username, result.can_manage);
+      showBoard(
+        result.username,
+        result.can_manage,
+        result.can_manage_franchises,
+        result.tenant_name,
+      );
     } catch (error) {
       loginError.textContent = error.message;
     }
@@ -601,7 +677,30 @@
   });
   document.querySelector("#add-vehicle-button").addEventListener("click", () => openVehicle());
   document.querySelector("#manage-locations-button").addEventListener("click", openLocationManager);
+  document.querySelector("#manage-franchises-button").addEventListener("click", openFranchiseManager);
   document.querySelector("#close-location-dialog").addEventListener("click", () => locationDialog.close());
+  document.querySelector("#close-franchise-dialog").addEventListener("click", () => franchiseDialog.close());
+  document.querySelector("#add-franchise-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    franchiseError.textContent = "";
+    const form = event.currentTarget;
+    if (!form.reportValidity()) return;
+    const data = new FormData(form);
+    try {
+      await api("/api/franchises", {
+        method: "POST",
+        body: JSON.stringify({
+          name: data.get("name"),
+          username: data.get("username"),
+          password: data.get("password"),
+        }),
+      });
+      form.reset();
+      await loadFranchises();
+    } catch (error) {
+      franchiseError.textContent = error.message;
+    }
+  });
   document.querySelector("#add-location-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     locationError.textContent = "";
@@ -666,7 +765,13 @@
     });
   });
   api("/api/me").then((result) => {
-    if (result.authenticated) showBoard(result.username, result.can_manage);
-    else showLogin();
+    if (result.authenticated) {
+      showBoard(result.username, result.can_manage, result.can_manage_franchises, result.tenant_name);
+    } else {
+      showLogin();
+      if (result.suspended) {
+        loginError.textContent = "この加盟店アカウントは一時停止中です。総本店へお問い合わせください。";
+      }
+    }
   }).catch(showLogin);
 })();

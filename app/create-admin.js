@@ -56,8 +56,12 @@ async function main(role = "admin") {
   const databasePath = process.env.DATABASE_PATH || "data/rentalcar.db";
   const db = openDatabase(databasePath);
   try {
-    const insertUser = db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)");
-    insertUser.run(username, await hashPassword(password), role);
+    const insertUser = db.prepare(`
+      INSERT INTO users (username, password_hash, role, tenant_id)
+      SELECT ?, ?, ?, id FROM tenants WHERE is_headquarters = 1
+    `);
+    const result = insertUser.run(username, await hashPassword(password), role);
+    if (!result.changes) throw new Error("Headquarters tenant is missing.");
   } catch (error) {
     if (error.code === "SQLITE_CONSTRAINT_UNIQUE") throw new Error("That username already exists.");
     throw error;
