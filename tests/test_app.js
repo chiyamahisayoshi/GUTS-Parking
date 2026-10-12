@@ -1195,6 +1195,18 @@ test("flattens previous board sections into peer locations without losing vehicl
   }
 });
 
+test("wires catalog search, token blink and labelled job time inputs", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../static/index.html"), "utf8");
+  const script = fs.readFileSync(path.join(__dirname, "../static/app.js"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "../static/style.css"), "utf8");
+  assert.match(html, /id="catalog-search"/);
+  assert.match(html, /貼り付け用/);
+  assert.match(html, /手入力/);
+  assert.match(script, /token-blink/);
+  assert.match(script, /catalog-search/);
+  assert.match(css, /@keyframes token-blink/);
+});
+
 test("manages dispatch jobs: ordering, completion, isolation, validation and midnight purge", async () => {
   const bootstrap = (await agent.get("/api/bootstrap")).body;
   const [, lotB] = bootstrap.parking_lots;

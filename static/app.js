@@ -797,8 +797,10 @@
   }
 
   function renderVehicleCatalog(boardVehicles) {
+    const query = normalizePlateQuery(document.querySelector("#catalog-search")?.value || "");
     const filtered = boardVehicles.filter((vehicle) =>
-      activeVehicleType === "all" || vehicle.vehicle_type === activeVehicleType,
+      (activeVehicleType === "all" || vehicle.vehicle_type === activeVehicleType) &&
+      (!query || normalizePlateQuery(vehicle.plate).includes(query)),
     );
     const list = document.querySelector("#vehicle-catalog-list");
     list.replaceChildren();
@@ -826,7 +828,14 @@
       item.addEventListener("click", () => {
         const location = document.querySelector(`[data-lot-id="${vehicle.parking_lot_id}"]`);
         location?.scrollIntoView({ behavior: "smooth", block: "center" });
-        document.querySelector(`[data-id="${vehicle.id}"]`)?.focus({ preventScroll: true });
+        const token = document.querySelector(`[data-id="${vehicle.id}"]`);
+        if (token) {
+          token.focus({ preventScroll: true });
+          token.classList.remove("token-blink");
+          void token.offsetWidth;
+          token.classList.add("token-blink");
+          setTimeout(() => token.classList.remove("token-blink"), 1700);
+        }
       });
       list.append(item);
     }
@@ -1117,6 +1126,7 @@
   document.querySelector("#manage-jobs-button").addEventListener("click", openJobManager);
   document.querySelector("#close-job-dialog").addEventListener("click", () =>
     document.querySelector("#job-dialog").close());
+  document.querySelector("#catalog-search").addEventListener("input", () => renderVehicleCatalog(vehicles));
   document.querySelector("#job-plate").addEventListener("input", updateJobSuggestions);
   document.querySelector("#job-time-picker").addEventListener("change", (event) => {
     if (event.target.value) {
