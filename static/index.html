@@ -18,13 +18,14 @@
       <label>パスワード<input name="password" type="password" autocomplete="current-password" required></label>
       <button class="primary-button" type="submit">ログイン</button>
       <p id="login-error" class="error-message" role="alert"></p>
+      <small class="app-version" data-app-version></small>
     </form>
   </main>
   <div id="app-screen" hidden>
     <header class="topbar">
       <a class="brand" href="/" aria-label="Rental Car Board">
         <span class="brand-mark small">R</span>
-        <span><b>車両配置ボード</b><small>RENTAL CAR OPERATIONS</small></span>
+        <span><b>車両配置ボード</b><small>RENTAL CAR OPERATIONS · <span data-app-version></span></small></span>
       </a>
       <div class="topbar-actions">
         <span id="connection-state" class="connection"><i></i>接続中</span>

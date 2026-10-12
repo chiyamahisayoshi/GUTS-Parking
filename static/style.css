@@ -29,6 +29,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .connection.offline { color: #c45b51; }
 .connection.offline i { background: #e26b60; }
 .current-user { font-size: 13px; color: #526176; }
+.app-version { display: block; color: var(--muted); font-size: 10px; text-align: center; }
 .quiet-button, .filter-button { background: #fff; border: 1px solid var(--border); color: #53657b; padding: 9px 13px; border-radius: 9px; }
 .page-content { max-width: 1600px; margin: auto; padding: 32px clamp(16px, 3vw, 44px) 60px; }
 .page-heading, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
