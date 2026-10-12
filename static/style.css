@@ -43,6 +43,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .summary-card { background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 13px 15px; min-height: 67px; }
 .summary-card span { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
 .summary-card b { font-size: 20px; }
+.board-search-bar { margin: 12px 0 16px; }
+.board-search-bar .catalog-search { width: 100%; max-width: 420px; }
 .board-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 330px; align-items: start; gap: 16px; }
 .parking-grid { min-width: 0; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 14px; }
 .lot-card { flex: 0 0 clamp(180px, calc(var(--lot-width, 50%) - 7px), 100%); min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 13px; overflow: hidden; box-shadow: 0 2px 7px #172b4d08; }
