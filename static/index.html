@@ -79,6 +79,7 @@
         <section id="parking-grid" class="parking-grid" aria-label="駐車場・貸出場所"></section>
         <aside class="vehicle-catalog" aria-labelledby="catalog-title">
           <div class="catalog-heading"><h2 id="catalog-title">車両一覧</h2><span id="catalog-total" class="muted"></span></div>
+          <input type="search" id="catalog-search" class="catalog-search" placeholder="車牌号で検索" aria-label="車牌号で検索" autocomplete="off">
           <div id="vehicle-type-filters" class="catalog-filters" role="group" aria-label="車種で絞り込み">
             <button class="type-filter active" data-vehicle-type="all">All</button>
           </div>
@@ -181,10 +182,14 @@
         <button type="button" id="close-job-dialog" class="close-button" aria-label="閉じる">×</button>
       </div>
       <form id="add-job-form" class="add-job-form" autocomplete="off">
-        <label>日時（貼り付け可）
-          <input name="scheduled_at" id="job-time-text" required placeholder="2026/10/13 10:30" inputmode="numeric">
-          <input type="datetime-local" id="job-time-picker" aria-label="日時を選択">
-        </label>
+        <div class="job-time-field">
+          <label>日時 <small class="hint">貼り付け用</small>
+            <input name="scheduled_at" id="job-time-text" required placeholder="2026/10/13 10:30" inputmode="numeric">
+          </label>
+          <label><small class="hint">手入力</small>
+            <input type="datetime-local" id="job-time-picker" aria-label="日時を手入力">
+          </label>
+        </div>
         <label class="job-plate-field">車両ナンバー
           <input name="plate" id="job-plate" required placeholder="例：1234" inputmode="numeric">
           <div id="job-suggestions" class="job-suggestions" hidden></div>
