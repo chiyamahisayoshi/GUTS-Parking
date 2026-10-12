@@ -22,6 +22,7 @@ const {
 } = require("./db");
 const { SQLiteSessionStore } = require("./session-store");
 const { hashPassword, verifyPassword } = require("./security");
+const { ErrorLogger } = require("./error-logger");
 
 const STATIC_DIR = path.resolve(__dirname, "..", "static");
 const THREE_BUILD_DIR = path.resolve(__dirname, "..", "node_modules", "three", "build");
@@ -31,6 +32,14 @@ const POSITION_GRID = Array.from({ length: 32 }, (_, index) => [
   [0.0625, 0.1875, 0.3125, 0.4375, 0.5625, 0.6875, 0.8125, 0.9375][Math.floor(index / 4)],
 ]);
 const DUMMY_PASSWORD_HASH = "scrypt$16384$8$1$00112233445566778899aabbccddeeff$".concat("00".repeat(64));
+const CLIENT_ERROR_TYPES = new Set([
+  "browser-error",
+  "unhandled-rejection",
+  "resource-load-error",
+  "network-error",
+  "server-response",
+  "interaction-error",
+]);
 
 function isGoogleMapsUrl(value) {
   if (typeof value !== "string" || value.length > 2000) return false;
@@ -58,16 +67,20 @@ function vehicleOptionsAreValid(db, options, tenantId) {
 }
 
 class RealtimeBoard {
-  constructor(db, sessionSecret) {
+  constructor(db, sessionSecret, errorLogger) {
     this.db = db;
     this.sessionSecret = sessionSecret;
+    this.errorLogger = errorLogger;
     this.clients = new Set();
     this.webSocketServer = new WebSocketServer({ noServer: true });
   }
 
   attach(server) {
     server.on("upgrade", (request, socket, head) => {
-      this.acceptUpgrade(request, socket, head).catch(() => socket.destroy());
+      this.acceptUpgrade(request, socket, head).catch((error) => {
+        this.errorLogger.capture("websocket-upgrade-error", error);
+        socket.destroy();
+      });
     });
   }
 
@@ -119,7 +132,10 @@ class RealtimeBoard {
       websocket.tenantId = user.tenant_id;
       this.clients.add(websocket);
       websocket.on("close", () => this.clients.delete(websocket));
-      websocket.on("error", () => this.clients.delete(websocket));
+      websocket.on("error", (error) => {
+        this.errorLogger.capture("websocket-error", error);
+        this.clients.delete(websocket);
+      });
       websocket.on("message", () => {
         if (websocket.readyState === WebSocket.OPEN) websocket.send(JSON.stringify({ type: "pong" }));
       });
@@ -289,6 +305,13 @@ function saveInspectionData(db, vehicleId, values, marks) {
   }
 }
 
+function defaultErrorLogPath(databasePath) {
+  const resolvedDatabasePath = databasePath === ":memory:"
+    ? path.resolve("data/rentalcar.db")
+    : path.resolve(databasePath);
+  return path.join(path.dirname(resolvedDatabasePath), "errors.log");
+}
+
 function parseVehicleId(value) {
   const id = Number(value);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
@@ -326,6 +349,10 @@ function getDefaultParkingLotId(db, tenantId) {
 
 function createApplication(options = {}) {
   const databasePath = options.databasePath || process.env.DATABASE_PATH || "data/rentalcar.db";
+  const errorLogger = options.errorLogger || new ErrorLogger(
+    options.errorLogPath || process.env.ERROR_LOG_PATH ||
+      defaultErrorLogPath(databasePath),
+  );
   const sessionSecret = options.sessionSecret || process.env.SESSION_SECRET;
   if (!sessionSecret || sessionSecret.length < 32) {
     throw new Error("Set SESSION_SECRET to a random value of at least 32 characters.");
@@ -337,8 +364,14 @@ function createApplication(options = {}) {
   if (!headquarters) throw new Error("Headquarters tenant is missing.");
   const headquartersId = headquarters.id;
   const sessionStore = new SQLiteSessionStore(db);
-  const realtime = new RealtimeBoard(db, sessionSecret);
+  const realtime = new RealtimeBoard(db, sessionSecret, errorLogger);
   const app = express();
+  const clientErrorLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
 
   app.set("trust proxy", 1);
   app.use(helmet({
@@ -364,6 +397,36 @@ function createApplication(options = {}) {
       maxAge: 12 * 60 * 60 * 1000,
     },
   }));
+
+  app.post("/api/client-errors", clientErrorLimiter, requireSameOrigin, (request, response) => {
+    const origin = request.get("origin");
+    if (!origin || origin !== `${request.protocol}://${request.get("host")}`) {
+      return response.status(403).json({ detail: "Same-origin error reports are required." });
+    }
+    const body = request.body || {};
+    if (!CLIENT_ERROR_TYPES.has(body.type) ||
+        typeof body.message !== "string" || !body.message.trim() ||
+        body.message.length > 2000 ||
+        (body.stack !== undefined && (typeof body.stack !== "string" || body.stack.length > 8000)) ||
+        (body.source !== undefined && (typeof body.source !== "string" || body.source.length > 1000)) ||
+        (body.path !== undefined && (typeof body.path !== "string" || body.path.length > 300)) ||
+        (body.status !== undefined && (!Number.isInteger(body.status) || body.status < 100 || body.status > 599)) ||
+        (body.line !== undefined && (!Number.isInteger(body.line) || body.line < 0)) ||
+        (body.column !== undefined && (!Number.isInteger(body.column) || body.column < 0))) {
+      return response.status(422).json({ detail: "Invalid error report." });
+    }
+    errorLogger.write({
+      type: `client-${body.type}`,
+      message: body.message,
+      ...(body.stack ? { stack: body.stack } : {}),
+      ...(body.source ? { source: body.source } : {}),
+      ...(body.path ? { path: body.path } : {}),
+      ...(body.status ? { status: body.status } : {}),
+      ...(body.line ? { line: body.line } : {}),
+      ...(body.column ? { column: body.column } : {}),
+    });
+    return response.status(202).end();
+  });
 
   function requireUser(request, response, next) {
     if (!request.session.username) return response.status(401).json({ detail: "Please sign in." });
@@ -1404,10 +1467,20 @@ function createApplication(options = {}) {
     }
   });
 
-  app.use((error, _request, response, _next) => {
-    if (error.type === "entity.parse.failed") return response.status(400).json({ detail: "Malformed JSON." });
-    if (error.type === "entity.too.large") return response.status(413).json({ detail: "Request body is too large." });
-    console.error(error);
+  app.use((error, request, response, _next) => {
+    if (error.type === "entity.parse.failed") {
+      errorLogger.capture("malformed-json", error, { status: 400, path: request.path });
+      return response.status(400).json({ detail: "Malformed JSON." });
+    }
+    if (error.type === "entity.too.large") {
+      errorLogger.capture("request-too-large", error, { status: 413, path: request.path });
+      return response.status(413).json({ detail: "Request body is too large." });
+    }
+    errorLogger.capture("server-error", error, {
+      status: 500,
+      method: request.method,
+      path: request.path,
+    });
     response.status(500).json({ detail: "Internal server error." });
   });
 
@@ -1417,11 +1490,19 @@ function createApplication(options = {}) {
     return server;
   }
 
-  return { app, db, sessionStore, createServer };
+  return { app, db, sessionStore, errorLogger, createServer };
 }
 
 async function start() {
   const application = createApplication();
+  process.on("unhandledRejection", (error) => {
+    application.errorLogger.capture("unhandled-rejection", error);
+    process.exit(1);
+  });
+  process.on("uncaughtException", (error) => {
+    application.errorLogger.capture("uncaught-exception", error);
+    process.exit(1);
+  });
   const server = application.createServer();
   const port = Number(process.env.PORT || 8000);
   const host = process.env.HOST || "127.0.0.1";
@@ -1440,11 +1521,19 @@ async function start() {
 if (require.main === module) {
   try {
     start().catch((error) => {
-      console.error(error);
+      const logger = new ErrorLogger(
+        process.env.ERROR_LOG_PATH ||
+          defaultErrorLogPath(process.env.DATABASE_PATH || "data/rentalcar.db"),
+      );
+      logger.capture("startup-error", error);
       process.exitCode = 1;
     });
   } catch (error) {
-    console.error(error);
+    const logger = new ErrorLogger(
+      process.env.ERROR_LOG_PATH ||
+        defaultErrorLogPath(process.env.DATABASE_PATH || "data/rentalcar.db"),
+    );
+    logger.capture("startup-error", error);
     process.exitCode = 1;
   }
 }

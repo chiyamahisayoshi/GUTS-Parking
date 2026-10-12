@@ -41,6 +41,32 @@
   const markingSaveRevisions = new Map();
   let suppressClick = false;
 
+  function reportClientError(type, error, details = {}) {
+    const message = error instanceof Error
+      ? `${error.name}: ${error.message}`
+      : String(error ?? "Unknown error");
+    const report = {
+      type,
+      message: message.slice(0, 2000),
+      path: location.pathname,
+      ...(error instanceof Error && error.stack ? { stack: error.stack.slice(0, 8000) } : {}),
+      ...(details.source ? { source: String(details.source).slice(0, 1000) } : {}),
+      ...(details.status ? { status: details.status } : {}),
+      ...(details.line ? { line: details.line } : {}),
+      ...(details.column ? { column: details.column } : {}),
+    };
+    fetch("/api/client-errors", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(report),
+      keepalive: true,
+    }).then((response) => {
+      if (!response.ok) console.error("Could not submit browser error report:", response.status);
+    }).catch((reportingError) => {
+      console.error("Could not submit browser error report:", reportingError);
+    });
+  }
+
   async function api(path, options = {}) {
     let response;
     try {
@@ -49,20 +75,31 @@
         headers: { "Content-Type": "application/json", ...(options.headers || {}) },
       });
     } catch (error) {
-      throw new Error(
+      reportClientError("network-error", error, { source: path });
+      const failure = new Error(
         "サーバーに接続できません。VPSのアプリ稼働状態、HTTPS、リバースプロキシの設定を確認してください。",
         { cause: error },
       );
+      failure.clientErrorReported = true;
+      throw failure;
     }
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
+      if (response.status >= 500) {
+        reportClientError("server-response", body.detail || `HTTP ${response.status}`, {
+          source: path,
+          status: response.status,
+        });
+      }
       if (response.status === 401 && path !== "/api/login") showLogin();
       if (response.status === 403 &&
           body.detail === "この加盟店アカウントは一時停止中です。総本店へお問い合わせください。") {
         loginError.textContent = body.detail;
         showLogin();
       }
-      throw new Error(body.detail || `Request failed (${response.status})`);
+      const failure = new Error(body.detail || `Request failed (${response.status})`);
+      failure.httpStatus = response.status;
+      throw failure;
     }
     return response.status === 204 ? null : response.json();
   }
@@ -95,6 +132,9 @@
   }
 
   function showError(error) {
+    if (!error?.clientErrorReported && !error?.httpStatus) {
+      reportClientError("browser-error", error);
+    }
     console.error(error);
     formError.textContent = error.message;
   }
@@ -1195,6 +1235,9 @@
       if (placed) {
         hint.textContent = `${drag.type.name}の位置を記録しました。車両の保存時に一緒に保存されます。`;
       } else {
+        reportClientError("interaction-error", "Damage marker drag did not hit a vehicle surface", {
+          source: "vehicle-inspection-3d-drag",
+        });
         selectedDamageTypeId = drag.type.id;
         renderInspectionDiagram();
         hint.textContent = "3D車体の表面まで損傷アイコンをドラッグしてください。";
@@ -1734,6 +1777,25 @@
       document.querySelectorAll(".filter-button").forEach((item) => item.classList.toggle("active", item === button));
       renderStatusList(vehicles);
     });
+  });
+  window.addEventListener("error", (event) => {
+    if (event.target && event.target !== window) {
+      const target = event.target;
+      if (target instanceof HTMLScriptElement || target instanceof HTMLLinkElement) {
+        reportClientError("resource-load-error", `${target.tagName} failed to load`, {
+          source: target.src || target.href || "",
+        });
+      }
+      return;
+    }
+    reportClientError("browser-error", event.error || event.message, {
+      source: event.filename,
+      line: event.lineno,
+      column: event.colno,
+    });
+  }, true);
+  window.addEventListener("unhandledrejection", (event) => {
+    reportClientError("unhandled-rejection", event.reason);
   });
   api("/api/me").then((result) => {
     setAppVersion(result.version);
