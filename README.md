@@ -152,6 +152,15 @@ rental update
 
 位置结构升级会由应用启动时自动迁移；脚本备份数据库，迁移不删除车辆。
 
+应用只把程序异常、浏览器运行时异常、前端 API 网络失败/服务器 5xx、损伤标记拖放失败、JSON 请求格式错误和过大的请求体写入独立错误日志，不记录正常操作，也不主动采集车辆资料、用户名、请求正文、Cookie 或 IP 地址；日志中的敏感键值会脱敏，路径中的查询参数会剔除。日志默认保存在数据库同一目录的 `errors.log`，超过 5 MB 时轮转并最多保留三个旧文件；在本 VPS 上路径为 `/www/wwwroot/rentalcar-data/errors.log`。查看最新错误：
+
+```bash
+tail -n 100 /www/wwwroot/rentalcar-data/errors.log
+tail -f /www/wwwroot/rentalcar-data/errors.log
+```
+
+浏览器中的 JavaScript 异常、未处理的 Promise 错误、静态脚本/样式加载错误、前端请求无法连接以及服务器 5xx 响应会自动报告至此日志；报告接口同源校验并限制频率。日志文件权限设为仅应用用户可读写。若需自定义位置，可在 `.env` 设置 `ERROR_LOG_PATH=/绝对路径/errors.log` 后重启服务。PM2 自身启动失败仍可通过 `rental status` 和 PM2 日志检查。
+
 当前单进程和 SQLite 适合单台 VPS 与约 250 台车。扩展到多进程/多服务器时，应改用共享数据库与消息通道。
 
 ### 常见部署问题

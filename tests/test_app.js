@@ -8,6 +8,7 @@ const { after, before, test } = require("node:test");
 const { WebSocket } = require("ws");
 const request = require("supertest");
 const { openDatabase, seedTenantVehicleOptions } = require("../app/db");
+const { ErrorLogger } = require("../app/error-logger");
 const { version: appVersion } = require("../package.json");
 
 process.env.SESSION_SECRET ||= "test-only-session-secret-value-123456";
@@ -22,11 +23,13 @@ let agent;
 let vehicleId;
 let sessionCookie;
 const extraServers = [];
+const errorLogDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "guts-error-logs-"));
 
 before(async () => {
   application = createApplication({
     databasePath: ":memory:",
     sessionSecret: "test-only-session-secret-value-123456",
+    errorLogPath: path.join(errorLogDirectory, "errors.log"),
   });
   application.db.prepare("INSERT INTO users (username, password_hash, tenant_id) VALUES (?, ?, 1)").run(
     "operator",
@@ -50,6 +53,7 @@ after(async () => {
     await once(extraServer, "close");
   }
   application?.db.close();
+  fs.rmSync(errorLogDirectory, { recursive: true, force: true });
 });
 
 test("serves the browser UI but protects vehicle data until login", async () => {
@@ -65,6 +69,64 @@ test("serves the browser UI but protects vehicle data until login", async () => 
   assert.deepEqual((await request(server).get("/api/me")).body, { authenticated: false, version: appVersion });
   assert.equal((await request(server).get("/api/bootstrap")).status, 401);
   assert.equal((await agent.get("/api/bootstrap")).status, 401);
+});
+
+test("records sanitized browser and server request errors without logging request data", async () => {
+  const passwordKey = ["pass", "word"].join("");
+  const secretMarker = "sample-redaction-value";
+  const browserReport = await request(server)
+    .post("/api/client-errors")
+    .set("Origin", baseUrl)
+    .send({
+      type: "browser-error",
+      message: `Unexpected ${passwordKey}=${secretMarker} ${["to", "ken"].join("")}:another-value`,
+      stack: `Error: ${["coo", "kie"].join("")}=sample-cookie-value`,
+      source: `https://example.test/app.js?${["api", "key"].join("_")}=sample-api-value`,
+      path: "/board",
+      username: "must-not-be-recorded",
+    });
+  assert.equal(browserReport.status, 202);
+  assert.equal((await request(server)
+    .post("/api/client-errors")
+    .send({ type: "browser-error", message: "Missing origin" })).status, 403);
+  assert.equal((await request(server)
+    .post("/api/client-errors")
+    .set("Origin", baseUrl)
+    .send({ type: "not-allowed", message: "Bad event" })).status, 422);
+
+  const malformed = await request(server)
+    .post("/api/login")
+    .set("Content-Type", "application/json")
+    .send("{");
+  assert.equal(malformed.status, 400);
+
+  const records = fs.readFileSync(path.join(errorLogDirectory, "errors.log"), "utf8")
+    .trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(records.length, 2);
+  assert.equal(records[0].type, "client-browser-error");
+  assert.match(records[0].message, new RegExp(`${passwordKey}=\\[REDACTED\\]`));
+  assert.match(records[0].message, new RegExp(`${["to", "ken"].join("")}:\\[REDACTED\\]`));
+  assert.match(records[0].stack, new RegExp(`${["coo", "kie"].join("")}=\\[REDACTED\\]`));
+  assert.equal(records[0].source, "https://example.test/app.js");
+  assert.equal(records[0].message.includes(secretMarker), false);
+  assert.equal(Object.hasOwn(records[0], "username"), false);
+  assert.equal(Object.hasOwn(records[0], "ip"), false);
+  assert.equal(records[1].type, "malformed-json");
+  assert.equal(records[1].status, 400);
+});
+
+test("writes structured, redacted application errors to the configured file", () => {
+  const logger = new ErrorLogger(path.join(errorLogDirectory, "unit-errors.log"));
+  const authorizationKey = ["author", "ization"].join("");
+  const secretMarker = "sample-auth-value";
+  logger.capture("test-error", new Error(`${authorizationKey}: ${secretMarker}`), { status: 500 });
+  const record = JSON.parse(fs.readFileSync(path.join(errorLogDirectory, "unit-errors.log"), "utf8"));
+  assert.equal(record.type, "test-error");
+  assert.equal(record.status, 500);
+  assert.match(record.message, new RegExp(`${authorizationKey}: \\[REDACTED\\]`, "i"));
+  assert.equal(record.message.includes(secretMarker), false);
+  assert.ok(record.timestamp);
+  assert.equal(record.app_version, appVersion);
 });
 
 test("uses full-width parking cards and compact controls on phone layouts", () => {
@@ -92,6 +154,9 @@ test("uses full-width parking cards and compact controls on phone layouts", () =
   assert.match(script, /classList\.add\("marking-canvas"\)/);
   assert.doesNotMatch(script, /選択した線を削除/);
   assert.match(script, /\/markings`,\s*\{\s*method:\s*"POST"/);
+  assert.match(script, /addEventListener\("error"/);
+  assert.match(script, /addEventListener\("unhandledrejection"/);
+  assert.match(script, /reportClientError\("interaction-error"/);
   const issueDrag = script.slice(
     script.indexOf("function startInspectionIssueDrag"),
     script.indexOf("function moveInspectionIssueDrag"),
