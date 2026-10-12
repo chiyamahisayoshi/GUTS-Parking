@@ -1128,6 +1128,11 @@
     document.querySelector("#job-dialog").close());
   document.querySelector("#catalog-search").addEventListener("input", () => renderVehicleCatalog(vehicles));
   document.querySelector("#job-plate").addEventListener("input", updateJobSuggestions);
+  document.querySelector("#job-time-button").addEventListener("click", () => {
+    const picker = document.querySelector("#job-time-picker");
+    if (picker.showPicker) picker.showPicker();
+    else picker.focus();
+  });
   document.querySelector("#job-time-picker").addEventListener("change", (event) => {
     if (event.target.value) {
       document.querySelector("#job-time-text").value = event.target.value.replace(/-/g, "/").replace("T", " ");
