@@ -11,12 +11,12 @@
   const locationError = document.querySelector("#location-error");
   const franchiseDialog = document.querySelector("#franchise-dialog");
   const franchiseError = document.querySelector("#franchise-error");
-  const statuses = ["unwashed", "no_fuel", "needs_repair"];
-  const statusLabels = { unwashed: "洗車待ち", no_fuel: "給油待ち", needs_repair: "要修理" };
-  const statusIcons = { unwashed: "🫧", no_fuel: "⛽", needs_repair: "🔧" };
+  const statusDialog = document.querySelector("#status-dialog");
+  const statusError = document.querySelector("#status-error");
   let lots = [];
   let vehicles = [];
   let vehicleTypes = [];
+  let statuses = [];
   let canManage = false;
   let canManageFranchises = false;
   let activeVehicleType = "all";
@@ -64,6 +64,7 @@
     document.querySelector("#manage-locations-button").hidden = !canManage;
     document.querySelector("#add-vehicle-button").hidden = !canManage;
     document.querySelector("#manage-franchises-button").hidden = !canManageFranchises;
+    document.querySelector("#manage-statuses-button").hidden = !canManage;
     connectSocket();
     loadBoard().catch(showError);
   }
@@ -79,8 +80,13 @@
     lots = data.parking_lots;
     vehicles = data.vehicles;
     vehicleTypes = data.vehicle_types;
+    statuses = data.statuses || [];
+    if (activeStatus !== "all" && !statuses.some((status) => String(status.id) === activeStatus)) {
+      activeStatus = "all";
+    }
     populateVehicleTypeChoices();
     render();
+    if (statusDialog.open) renderStatusManager();
   }
 
   function typeClass(type) {
@@ -97,9 +103,10 @@
     document.querySelector("#vehicle-count").textContent = vehicles.length;
     document.querySelector("#lot-count").textContent = lots.length;
     document.querySelector("#attention-count").textContent = vehicles.filter((vehicle) =>
-      statuses.some((status) => vehicle[status]),
+      vehicle.status_ids?.length,
     ).length;
     renderVehicleCatalog(vehicles);
+    renderStatusFilters();
     renderStatusList(vehicles);
   }
 
@@ -171,9 +178,11 @@
       resize.textContent = "サイズ調整";
       resize.title = "クリック後、右下のハンドルをドラッグしてサイズを調整";
       resize.addEventListener("click", () => {
-        editingLotId = editingLotId === lot.id ? null : lot.id;
-        if (drawingLotId === lot.id) drawingLotId = null;
+        const nextEditingLotId = editingLotId === lot.id ? null : lot.id;
+        if (nextEditingLotId !== editingLotId) drawingLotId = null;
+        editingLotId = nextEditingLotId;
         selectedMarking = null;
+        markingError = "";
         render();
       });
       const earlier = makeLotControl("←", "左へ移動", () => moveLot(lot.id, -1));
@@ -266,7 +275,17 @@
       remove.addEventListener("click", () => {
         updateMarkings(lot, markings.filter((marking) => marking.id !== selectedMarking));
       });
-      tools.append(draw, color, remove);
+      const undo = document.createElement("button");
+      undo.type = "button";
+      undo.className = "lot-control";
+      undo.textContent = "取り消し";
+      undo.title = "最後に描いた線を取り消します";
+      undo.disabled = markings.length === 0;
+      undo.addEventListener("click", () => {
+        if (!markings.length) return;
+        updateMarkings(lot, markings.slice(0, -1));
+      });
+      tools.append(draw, color, undo, remove);
       const guidance = document.createElement("span");
       guidance.className = "lot-marking-guidance";
       guidance.textContent = drawingLotId === lot.id
@@ -493,7 +512,7 @@
     plate.textContent = vehicle.plate;
     token.append(plate);
     const badges = [
-      ...statuses.filter((status) => vehicle[status]).map((status) => statusIcons[status]),
+      ...statuses.filter((status) => vehicle.status_ids?.includes(status.id)).map((status) => status.icon),
       ...(vehicle.options || []),
     ];
     if (badges.length) {
@@ -515,6 +534,7 @@
 
   function startDrag(event) {
     if (event.button !== 0 || dragged) return;
+    event.preventDefault();
     const token = event.currentTarget;
     const ghost = token.cloneNode(true);
     ghost.classList.add("dragging", "drag-ghost");
@@ -531,26 +551,60 @@
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
+      clientX: event.clientX,
+      clientY: event.clientY,
       moved: false,
     };
+    token.setPointerCapture(event.pointerId);
+    dragged.scrollFrame = requestAnimationFrame(autoScrollWhileDragging);
   }
 
   function moveDrag(event) {
     if (!dragged || event.pointerId !== dragged.pointerId) return;
+    dragged.clientX = event.clientX;
+    dragged.clientY = event.clientY;
     if (Math.abs(event.clientX - dragged.startX) + Math.abs(event.clientY - dragged.startY) > 5) {
       dragged.moved = true;
     }
     if (!dragged.moved) return;
     dragged.ghost.style.left = `${event.clientX}px`;
     dragged.ghost.style.top = `${event.clientY}px`;
+    updateDropTarget(event.clientX, event.clientY);
+  }
+
+  function updateDropTarget(x, y) {
     document.querySelectorAll(".lot-area.drop-target").forEach((area) => area.classList.remove("drop-target"));
-    document.elementFromPoint(event.clientX, event.clientY)
+    document.elementFromPoint(x, y)
       ?.closest(".lot-area")?.classList.add("drop-target");
+  }
+
+  function autoScrollWhileDragging() {
+    if (!dragged) return;
+    dragged.scrollFrame = requestAnimationFrame(autoScrollWhileDragging);
+    if (!dragged.moved) return;
+    const edgeSize = Math.min(100, window.innerHeight * 0.16);
+    const y = dragged.clientY;
+    let scrollDelta = 0;
+    if (y < edgeSize) {
+      scrollDelta = -Math.ceil(20 * (1 - y / edgeSize));
+    } else if (y > window.innerHeight - edgeSize) {
+      scrollDelta = Math.ceil(20 * (1 - (window.innerHeight - y) / edgeSize));
+    }
+    if (!scrollDelta) return;
+    const previousScrollY = window.scrollY;
+    window.scrollBy(0, scrollDelta);
+    if (window.scrollY !== previousScrollY) {
+      updateDropTarget(dragged.clientX, dragged.clientY);
+    }
   }
 
   async function endDrag(event, cancelled = false) {
     if (!dragged || event.pointerId !== dragged.pointerId) return;
     const current = dragged;
+    cancelAnimationFrame(current.scrollFrame);
+    current.clientX = event.clientX;
+    current.clientY = event.clientY;
+    if (!cancelled && current.moved) updateDropTarget(event.clientX, event.clientY);
     const dropTarget = !cancelled && current.moved
       ? document.elementFromPoint(event.clientX, event.clientY)
       : null;
@@ -652,10 +706,34 @@
     }
   }
 
+  function renderStatusFilters() {
+    const filters = document.querySelector("#status-filters");
+    filters.replaceChildren();
+    const options = [{ id: "all", label: "すべて" }, ...statuses.map((status) => ({
+      id: String(status.id),
+      label: `${status.icon} ${status.name}`,
+    }))];
+    for (const status of options) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `filter-button${String(activeStatus) === status.id ? " active" : ""}`;
+      button.dataset.filter = status.id;
+      button.textContent = status.label;
+      button.addEventListener("click", () => {
+        activeStatus = status.id;
+        renderStatusFilters();
+        renderStatusList(vehicles);
+      });
+      filters.append(button);
+    }
+  }
+
   function renderStatusList(boardVehicles) {
     const list = document.querySelector("#status-list");
     list.replaceChildren();
-    const filtered = boardVehicles.filter((vehicle) => activeStatus === "all" || vehicle[activeStatus]);
+    const selectedStatusId = activeStatus === "all" ? null : Number(activeStatus);
+    const filtered = boardVehicles.filter((vehicle) =>
+      selectedStatusId === null || vehicle.status_ids?.includes(selectedStatusId));
     document.querySelector("#status-total").textContent = `${filtered.length} 台`;
     if (!filtered.length) {
       const empty = document.createElement("p");
@@ -671,7 +749,8 @@
       const plate = document.createElement("strong");
       plate.textContent = vehicle.plate;
       const description = document.createElement("span");
-      const active = statuses.filter((status) => vehicle[status]).map((status) => statusLabels[status]);
+      const active = statuses.filter((status) => vehicle.status_ids?.includes(status.id))
+        .map((status) => `${status.icon} ${status.name}`);
       const lot = lots.find((entry) => entry.id === vehicle.parking_lot_id);
       description.textContent = `${lot?.name || "未配置"} · ${active.join(" / ") || vehicle.vehicle_type}`;
       item.append(plate, description);
@@ -681,6 +760,65 @@
         document.querySelector(`[data-id="${vehicle.id}"]`)?.focus({ preventScroll: true });
       });
       list.append(item);
+    }
+  }
+
+  function renderVehicleStatusOptions(vehicle) {
+    const options = document.querySelector("#vehicle-status-options");
+    options.replaceChildren();
+    for (const status of statuses) {
+      const label = document.createElement("label");
+      label.className = "check-label";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.name = "status_ids";
+      input.value = status.id;
+      input.checked = vehicle?.status_ids?.includes(status.id) || false;
+      label.append(input, document.createTextNode(`${status.icon} ${status.name}`));
+      options.append(label);
+    }
+    if (!statuses.length) {
+      const empty = document.createElement("span");
+      empty.className = "status-empty";
+      empty.textContent = "対応ステータスはありません。";
+      options.append(empty);
+    }
+  }
+
+  function renderStatusManager() {
+    const list = document.querySelector("#status-manager-list");
+    list.replaceChildren();
+    if (!statuses.length) {
+      const empty = document.createElement("p");
+      empty.className = "status-empty";
+      empty.textContent = "対応ステータスはありません。";
+      list.append(empty);
+      return;
+    }
+    for (const status of statuses) {
+      const row = document.createElement("div");
+      row.className = "status-manager-row";
+      const label = document.createElement("span");
+      label.textContent = `${status.icon} ${status.name}`;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger-button";
+      remove.textContent = "削除";
+      remove.addEventListener("click", async () => {
+        statusError.textContent = "";
+        if (!window.confirm(`ステータス「${status.name}」を削除しますか？登録済み車両からも解除されます。`)) return;
+        remove.disabled = true;
+        try {
+          await api(`/api/statuses/${status.id}`, { method: "DELETE" });
+          await loadBoard();
+          renderStatusManager();
+        } catch (error) {
+          statusError.textContent = error.message;
+          remove.disabled = false;
+        }
+      });
+      row.append(label, remove);
+      list.append(row);
     }
   }
 
@@ -872,8 +1010,15 @@
     for (const input of vehicleForm.querySelectorAll('input[name="options"]')) {
       input.checked = Boolean(vehicle?.options?.includes(input.value));
     }
-    for (const status of statuses) vehicleForm.elements[status].checked = Boolean(vehicle?.[status]);
+    renderVehicleStatusOptions(vehicle);
     dialog.showModal();
+  }
+
+  function openStatusManager() {
+    if (!canManage) return;
+    statusError.textContent = "";
+    renderStatusManager();
+    statusDialog.showModal();
   }
 
   function connectSocket() {
@@ -934,8 +1079,28 @@
   document.querySelector("#add-vehicle-button").addEventListener("click", () => openVehicle());
   document.querySelector("#manage-locations-button").addEventListener("click", openLocationManager);
   document.querySelector("#manage-franchises-button").addEventListener("click", openFranchiseManager);
+  document.querySelector("#manage-statuses-button").addEventListener("click", openStatusManager);
   document.querySelector("#close-location-dialog").addEventListener("click", () => locationDialog.close());
   document.querySelector("#close-franchise-dialog").addEventListener("click", () => franchiseDialog.close());
+  document.querySelector("#close-status-dialog").addEventListener("click", () => statusDialog.close());
+  document.querySelector("#add-status-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    statusError.textContent = "";
+    const form = event.currentTarget;
+    if (!form.reportValidity()) return;
+    const data = new FormData(form);
+    try {
+      await api("/api/statuses", {
+        method: "POST",
+        body: JSON.stringify({ name: data.get("name"), icon: data.get("icon") }),
+      });
+      form.reset();
+      await loadBoard();
+      renderStatusManager();
+    } catch (error) {
+      statusError.textContent = error.message;
+    }
+  });
   document.querySelector("#add-franchise-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     franchiseError.textContent = "";
@@ -1000,7 +1165,7 @@
       vehicle_type: form.get("vehicle_type"),
       options: form.getAll("options"),
     };
-    for (const status of statuses) payload[status] = form.has(status);
+    payload.status_ids = form.getAll("status_ids").map(Number);
     try {
       await api(id ? `/api/vehicles/${id}` : "/api/vehicles", {
         method: id ? "PATCH" : "POST",

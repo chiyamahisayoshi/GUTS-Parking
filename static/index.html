@@ -46,6 +46,23 @@
         <div class="summary-card"><span>配置エリア</span><b id="lot-count">13</b></div>
         <div class="summary-card"><span>要対応</span><b id="attention-count">0</b></div>
       </section>
+      <section class="status-section">
+        <details id="status-panel" open>
+          <summary class="status-summary">
+            <span><p class="eyebrow">FOLLOW-UP</p><strong>ステータス別の車両</strong></span>
+            <span class="status-summary-actions"><span id="status-total" class="muted"></span><span class="status-toggle-icon" aria-hidden="true">⌄</span></span>
+          </summary>
+          <div class="status-panel-content">
+            <div class="status-toolbar">
+              <div id="status-filters" class="filter-row" role="group" aria-label="車両ステータスで絞り込み">
+                <button class="filter-button active" data-filter="all">すべて</button>
+              </div>
+              <button id="manage-statuses-button" class="quiet-button" hidden>ステータスを管理</button>
+            </div>
+            <div id="status-list" class="status-list"></div>
+          </div>
+        </details>
+      </section>
       <div class="board-workspace">
         <section id="parking-grid" class="parking-grid" aria-label="駐車場・貸出場所"></section>
         <aside class="vehicle-catalog" aria-labelledby="catalog-title">
@@ -55,16 +72,6 @@
           </div>
           <div id="vehicle-catalog-list" class="vehicle-catalog-list"></div>
         </aside>
-      </div>
-      <section class="status-section">
-        <div class="section-heading"><div><p class="eyebrow">FOLLOW-UP</p><h2>ステータス別の車両</h2></div><span id="status-total" class="muted"></span></div>
-        <div class="filter-row" role="group" aria-label="車両ステータスで絞り込み">
-          <button class="filter-button active" data-filter="all">すべて</button>
-          <button class="filter-button" data-filter="unwashed">🫧 洗車待ち</button>
-          <button class="filter-button" data-filter="no_fuel">⛽ 給油待ち</button>
-          <button class="filter-button" data-filter="needs_repair">🔧 要修理</button>
-        </div>
-        <div id="status-list" class="status-list"></div>
       </section>
     </main>
   </div>
@@ -85,14 +92,26 @@
         <label class="check-label"><input type="checkbox" name="options" value="ナビ">ナビ</label>
         <label class="check-label"><input type="checkbox" name="options" value="スタッドレス">スタッドレス</label>
       </fieldset>
-      <fieldset class="status-fields"><legend>対応ステータス</legend>
-        <label class="check-label"><input type="checkbox" name="unwashed">洗車待ち</label>
-        <label class="check-label"><input type="checkbox" name="no_fuel">給油待ち</label>
-        <label class="check-label"><input type="checkbox" name="needs_repair">要修理</label>
-      </fieldset>
+      <fieldset class="status-fields"><legend>対応ステータス</legend><div id="vehicle-status-options" class="status-option-list"></div></fieldset>
       <p id="form-error" class="error-message" role="alert"></p>
       <div class="dialog-actions"><button type="button" id="delete-vehicle" class="danger-button" hidden>車両を削除</button><span></span><button type="button" id="cancel-dialog" class="quiet-button">キャンセル</button><button type="submit" class="primary-button">保存</button></div>
     </form>
+  </dialog>
+  <dialog id="status-dialog">
+    <div class="status-form">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">FOLLOW-UP SETTINGS</p><h2>対応ステータスを管理</h2></div>
+        <button type="button" id="close-status-dialog" class="close-button" aria-label="閉じる">×</button>
+      </div>
+      <p class="muted">項目を削除すると、登録済み車両からもそのステータスが解除されます。</p>
+      <div id="status-manager-list" class="status-manager-list"></div>
+      <form id="add-status-form" class="add-status-form">
+        <label>新しいステータス名<input name="name" required maxlength="40" placeholder="例：書類確認待ち"></label>
+        <label>アイコン（任意）<input name="icon" maxlength="8" placeholder="🔔"></label>
+        <button type="submit" class="primary-button">項目を追加</button>
+      </form>
+      <p id="status-error" class="error-message" role="alert"></p>
+    </div>
   </dialog>
   <dialog id="location-dialog">
     <div class="location-form">

@@ -9,12 +9,19 @@ const signature = require("cookie-signature");
 const { rateLimit } = require("express-rate-limit");
 const { WebSocket, WebSocketServer } = require("ws");
 
-const { LOT_NAMES, VEHICLE_OPTIONS, VEHICLE_TYPES, openDatabase } = require("./db");
+const {
+  DEFAULT_STATUSES,
+  LOT_NAMES,
+  VEHICLE_OPTIONS,
+  VEHICLE_TYPES,
+  openDatabase,
+  seedTenantStatuses,
+} = require("./db");
 const { SQLiteSessionStore } = require("./session-store");
 const { hashPassword, verifyPassword } = require("./security");
 
 const STATIC_DIR = path.resolve(__dirname, "..", "static");
-const STATUSES = ["unwashed", "no_fuel", "needs_repair"];
+const STATUSES = DEFAULT_STATUSES.map((status) => status.key);
 const POSITION_GRID = Array.from({ length: 32 }, (_, index) => [
   [0.125, 0.375, 0.625, 0.875][index % 4],
   [0.0625, 0.1875, 0.3125, 0.4375, 0.5625, 0.6875, 0.8125, 0.9375][Math.floor(index / 4)],
@@ -143,15 +150,36 @@ function validateMarkings(markings) {
   });
 }
 
-function vehicleFromRow(row) {
+function vehicleFromRow(row, statusIds = []) {
   const { board_section: _legacyBoardSection, ...vehicle } = row;
   for (const status of STATUSES) vehicle[status] = Boolean(vehicle[status]);
+  vehicle.status_ids = statusIds;
   try {
     vehicle.options = JSON.parse(vehicle.options || "[]");
   } catch {
     vehicle.options = [];
   }
   return vehicle;
+}
+
+function getVehicleStatusIds(db, vehicleId) {
+  return db.prepare(
+    "SELECT status_id FROM vehicle_status_assignments WHERE vehicle_id = ? ORDER BY status_id",
+  ).all(vehicleId).map((row) => row.status_id);
+}
+
+function vehicleResponse(db, row) {
+  return vehicleFromRow(row, getVehicleStatusIds(db, row.id));
+}
+
+function statusIdsAreValid(db, statusIds, tenantId) {
+  if (!Array.isArray(statusIds) || statusIds.some((id) => !Number.isSafeInteger(id)) ||
+      new Set(statusIds).size !== statusIds.length) return false;
+  if (!statusIds.length) return true;
+  const placeholders = statusIds.map(() => "?").join(", ");
+  return db.prepare(
+    `SELECT COUNT(*) AS count FROM vehicle_statuses WHERE tenant_id = ? AND id IN (${placeholders})`,
+  ).get(tenantId, ...statusIds).count === statusIds.length;
 }
 
 function parseVehicleId(value) {
@@ -359,14 +387,33 @@ function createApplication(options = {}) {
       `SELECT id, name, display_order, area_height, area_width, navigation_url, markings
        FROM parking_lots WHERE tenant_id = ? ORDER BY display_order, id`,
     ).all(request.tenantId).map(parkingLotFromRow);
-    const vehicles = db.prepare(`
+    const vehicleRows = db.prepare(`
       SELECT id, external_id, plate, vehicle_type, parking_lot_id,
              position_x, position_y, unwashed, no_fuel, needs_repair, options
       FROM vehicles WHERE tenant_id = ? ORDER BY plate, id
-    `).all(request.tenantId).map(vehicleFromRow);
+    `).all(request.tenantId);
+    const statusAssignments = new Map();
+    for (const assignment of db.prepare(`
+      SELECT a.vehicle_id, a.status_id
+      FROM vehicle_status_assignments a
+      JOIN vehicles v ON v.id = a.vehicle_id
+      WHERE v.tenant_id = ?
+      ORDER BY a.status_id
+    `).all(request.tenantId)) {
+      if (!statusAssignments.has(assignment.vehicle_id)) {
+        statusAssignments.set(assignment.vehicle_id, []);
+      }
+      statusAssignments.get(assignment.vehicle_id).push(assignment.status_id);
+    }
+    const vehicles = vehicleRows.map((row) =>
+      vehicleFromRow(row, statusAssignments.get(row.id) || []));
+    const statuses = db.prepare(
+      "SELECT id, name, icon, key FROM vehicle_statuses WHERE tenant_id = ? ORDER BY id",
+    ).all(request.tenantId);
     response.json({
       parking_lots: parkingLots,
       vehicles,
+      statuses,
       vehicle_types: VEHICLE_TYPES,
       vehicle_options: VEHICLE_OPTIONS,
     });
@@ -412,6 +459,7 @@ function createApplication(options = {}) {
           "INSERT INTO tenants (name, is_headquarters, is_active) VALUES (?, 0, 1)",
         ).run(name);
         tenantId = Number(tenantResult.lastInsertRowid);
+        seedTenantStatuses(db, tenantId);
         db.prepare(`
           INSERT INTO users (username, password_hash, role, tenant_id)
           VALUES (?, ?, 'admin', ?)
@@ -664,6 +712,58 @@ function createApplication(options = {}) {
     }
   });
 
+  app.post("/api/statuses", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
+    const rawIcon = request.body?.icon;
+    const icon = rawIcon === undefined ? "🔔" : typeof rawIcon === "string" ? rawIcon.trim() : null;
+    if (!name || name.length > 40 || icon === null || icon.length > 8) {
+      return response.status(422).json({ detail: "ステータス名は1〜40文字、アイコンは8文字以内で入力してください。" });
+    }
+    try {
+      const result = db.prepare(`
+        INSERT INTO vehicle_statuses (tenant_id, name, icon)
+        VALUES (?, ?, ?)
+      `).run(request.tenantId, name, icon || "🔔");
+      realtime.notify(request.tenantId);
+      response.status(201).json(db.prepare(
+        "SELECT id, name, icon, key FROM vehicle_statuses WHERE id = ? AND tenant_id = ?",
+      ).get(result.lastInsertRowid, request.tenantId));
+    } catch (error) {
+      if (isUniqueConstraint(error)) {
+        return response.status(409).json({ detail: "同じ名前のステータスは既に登録されています。" });
+      }
+      next(error);
+    }
+  });
+
+  app.delete("/api/statuses/:id", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const statusId = parseVehicleId(request.params.id);
+    if (statusId === null) return response.status(404).json({ detail: "ステータスが見つかりません。" });
+    const status = db.prepare(
+      "SELECT id, key FROM vehicle_statuses WHERE id = ? AND tenant_id = ?",
+    ).get(statusId, request.tenantId);
+    if (!status) return response.status(404).json({ detail: "ステータスが見つかりません。" });
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        if (STATUSES.includes(status.key)) {
+          db.prepare(`UPDATE vehicles SET ${status.key} = 0 WHERE tenant_id = ?`)
+            .run(request.tenantId);
+        }
+        db.prepare("DELETE FROM vehicle_statuses WHERE id = ? AND tenant_id = ?")
+          .run(statusId, request.tenantId);
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      realtime.notify(request.tenantId);
+      response.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/vehicles", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
     try {
       const body = request.body || {};
@@ -698,18 +798,48 @@ function createApplication(options = {}) {
           new Set(options).size !== options.length) {
         return response.status(422).json({ detail: "Invalid vehicle options." });
       }
-      const result = db.prepare(`
-        INSERT INTO vehicles
-          (plate, vehicle_type, parking_lot_id, position_x, position_y,
-           unwashed, no_fuel, needs_repair, options, tenant_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        plate.trim(), vehicleType.trim(), lotId ?? null, position.positionX, position.positionY,
-        Number(body.unwashed === true), Number(body.no_fuel === true),
-        Number(body.needs_repair === true), JSON.stringify(options), request.tenantId,
-      );
+      if (STATUSES.some((status) => Object.hasOwn(body, status) && typeof body[status] !== "boolean")) {
+        return response.status(422).json({ detail: "Vehicle statuses must be boolean." });
+      }
+      const legacyStatuses = db.prepare(
+        `SELECT id, key FROM vehicle_statuses WHERE tenant_id = ? AND key IN (${STATUSES.map(() => "?").join(", ")})`,
+      ).all(request.tenantId, ...STATUSES);
+      let statusIds;
+      if (Object.hasOwn(body, "status_ids")) {
+        statusIds = body.status_ids;
+        if (!statusIdsAreValid(db, statusIds, request.tenantId)) {
+          return response.status(422).json({ detail: "Invalid vehicle status list." });
+        }
+      } else {
+        statusIds = legacyStatuses.filter((status) => body[status.key] === true)
+          .map((status) => status.id);
+      }
+      const legacyStatusIds = new Map(legacyStatuses.map((status) => [status.key, status.id]));
+      const assignedStatusIds = new Set(statusIds);
+      db.exec("BEGIN IMMEDIATE");
+      let result;
+      try {
+        result = db.prepare(`
+          INSERT INTO vehicles
+            (plate, vehicle_type, parking_lot_id, position_x, position_y,
+             unwashed, no_fuel, needs_repair, options, tenant_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          plate.trim(), vehicleType.trim(), lotId ?? null, position.positionX, position.positionY,
+          ...STATUSES.map((status) => Number(assignedStatusIds.has(legacyStatusIds.get(status)))),
+          JSON.stringify(options), request.tenantId,
+        );
+        const addAssignment = db.prepare(
+          "INSERT INTO vehicle_status_assignments (vehicle_id, status_id) VALUES (?, ?)",
+        );
+        for (const statusId of statusIds) addAssignment.run(result.lastInsertRowid, statusId);
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
       realtime.notify(request.tenantId);
-      response.status(201).json(vehicleFromRow(db.prepare(
+      response.status(201).json(vehicleResponse(db, db.prepare(
         "SELECT * FROM vehicles WHERE id = ? AND tenant_id = ?",
       ).get(result.lastInsertRowid, request.tenantId)));
     } catch (error) {
@@ -729,7 +859,7 @@ function createApplication(options = {}) {
       if (!existingVehicle) return response.status(404).json({ detail: "Vehicle not found." });
       const allowed = new Set([
         "plate", "vehicle_type", "parking_lot_id", "position_x", "position_y",
-        "options", ...STATUSES,
+        "options", "status_ids", ...STATUSES,
       ]);
       const entries = Object.entries(request.body || {});
       if (!entries.length) return response.status(422).json({ detail: "No vehicle fields supplied." });
@@ -737,6 +867,26 @@ function createApplication(options = {}) {
         return response.status(422).json({ detail: "Unknown vehicle field." });
       }
       const data = Object.fromEntries(entries);
+      const hasStatusIds = Object.hasOwn(data, "status_ids");
+      let nextStatusIds = null;
+      if (hasStatusIds) {
+        if (!statusIdsAreValid(db, data.status_ids, request.tenantId)) {
+          return response.status(422).json({ detail: "Invalid vehicle status list." });
+        }
+        nextStatusIds = data.status_ids;
+      } else if (STATUSES.some((status) => Object.hasOwn(data, status))) {
+        const currentStatusIds = new Set(getVehicleStatusIds(db, vehicleId));
+        const legacyStatuses = db.prepare(
+          `SELECT id, key FROM vehicle_statuses WHERE tenant_id = ? AND key IN (${STATUSES.map(() => "?").join(", ")})`,
+        ).all(request.tenantId, ...STATUSES);
+        for (const status of legacyStatuses) {
+          if (!Object.hasOwn(data, status.key)) continue;
+          if (data[status.key] === true) currentStatusIds.add(status.id);
+          else currentStatusIds.delete(status.id);
+        }
+        nextStatusIds = [...currentStatusIds];
+      }
+      delete data.status_ids;
       if (
         ["plate", "vehicle_type"].some((field) =>
           Object.hasOwn(data, field) &&
@@ -779,15 +929,40 @@ function createApplication(options = {}) {
       for (const field of ["plate", "vehicle_type"]) {
         if (Object.hasOwn(data, field)) data[field] = data[field].trim();
       }
+      if (nextStatusIds !== null) {
+        const legacyStatuses = db.prepare(
+          `SELECT id, key FROM vehicle_statuses WHERE tenant_id = ? AND key IN (${STATUSES.map(() => "?").join(", ")})`,
+        ).all(request.tenantId, ...STATUSES);
+        const assignedStatusIds = new Set(nextStatusIds);
+        for (const status of STATUSES) {
+          data[status] = Number(legacyStatuses.some((entry) =>
+            entry.key === status && assignedStatusIds.has(entry.id)));
+        }
+      }
       for (const field of STATUSES) {
         if (Object.hasOwn(data, field)) data[field] = Number(data[field]);
       }
       const assignments = Object.keys(data).map((field) => `${field} = ?`).join(", ");
-      const result = db.prepare(`UPDATE vehicles SET ${assignments} WHERE id = ? AND tenant_id = ?`)
-        .run(...Object.values(data), vehicleId, request.tenantId);
-      if (!result.changes) return response.status(404).json({ detail: "Vehicle not found." });
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        if (assignments) {
+          db.prepare(`UPDATE vehicles SET ${assignments} WHERE id = ? AND tenant_id = ?`)
+            .run(...Object.values(data), vehicleId, request.tenantId);
+        }
+        if (nextStatusIds !== null) {
+          db.prepare("DELETE FROM vehicle_status_assignments WHERE vehicle_id = ?").run(vehicleId);
+          const addAssignment = db.prepare(
+            "INSERT INTO vehicle_status_assignments (vehicle_id, status_id) VALUES (?, ?)",
+          );
+          for (const statusId of nextStatusIds) addAssignment.run(vehicleId, statusId);
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
       realtime.notify(request.tenantId);
-      response.json(vehicleFromRow(db.prepare(
+      response.json(vehicleResponse(db, db.prepare(
         "SELECT * FROM vehicles WHERE id = ? AND tenant_id = ?",
       ).get(vehicleId, request.tenantId)));
     } catch (error) {

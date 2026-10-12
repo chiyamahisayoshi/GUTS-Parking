@@ -11,7 +11,22 @@ const LOT_NAMES = [
 ];
 const VEHICLE_TYPES = ["A-1", "A-2", "A-2P", "B", "B軽トラ", "C-1", "C-2", "D", "H-1", "H-2", "その他"];
 const VEHICLE_OPTIONS = ["ETC", "車載器", "禁煙", "喫煙", "ナビ", "スタッドレス"];
+const DEFAULT_STATUSES = [
+  { key: "unwashed", name: "洗車待ち", icon: "🫧" },
+  { key: "no_fuel", name: "給油待ち", icon: "⛽" },
+  { key: "needs_repair", name: "要修理", icon: "🔧" },
+];
 const TENANT_DATA_MIGRATION = "tenant-isolation-v1";
+
+function seedTenantStatuses(db, tenantId) {
+  const addStatus = db.prepare(`
+    INSERT OR IGNORE INTO vehicle_statuses (tenant_id, key, name, icon)
+    VALUES (?, ?, ?, ?)
+  `);
+  for (const status of DEFAULT_STATUSES) {
+    addStatus.run(tenantId, status.key, status.name, status.icon);
+  }
+}
 
 function openDatabase(databasePath) {
   if (databasePath !== ":memory:") fs.mkdirSync(path.dirname(path.resolve(databasePath)), { recursive: true });
@@ -250,7 +265,59 @@ function openDatabase(databasePath) {
     db.close();
     throw error;
   }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vehicle_statuses (
+      id INTEGER PRIMARY KEY,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      key TEXT,
+      name TEXT NOT NULL,
+      icon TEXT NOT NULL DEFAULT '🔔',
+      UNIQUE (tenant_id, key),
+      UNIQUE (tenant_id, name COLLATE NOCASE)
+    );
+    CREATE TABLE IF NOT EXISTS vehicle_status_assignments (
+      vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+      status_id INTEGER NOT NULL REFERENCES vehicle_statuses(id) ON DELETE CASCADE,
+      PRIMARY KEY (vehicle_id, status_id)
+    );
+    CREATE INDEX IF NOT EXISTS vehicle_statuses_tenant_idx ON vehicle_statuses(tenant_id);
+    CREATE INDEX IF NOT EXISTS vehicle_status_assignments_status_idx
+      ON vehicle_status_assignments(status_id);
+  `);
+  const statusMigration = "custom-vehicle-statuses-v1";
+  if (!db.prepare("SELECT 1 FROM schema_migrations WHERE name = ?").get(statusMigration)) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const tenants = db.prepare("SELECT id FROM tenants").all();
+      for (const tenant of tenants) {
+        seedTenantStatuses(db, tenant.id);
+      }
+      for (const status of DEFAULT_STATUSES) {
+        for (const tenant of tenants) {
+          db.prepare(`
+            INSERT OR IGNORE INTO vehicle_status_assignments (vehicle_id, status_id)
+            SELECT v.id, s.id FROM vehicles v
+            JOIN vehicle_statuses s ON s.tenant_id = v.tenant_id AND s.key = ?
+            WHERE v.tenant_id = ? AND v.${status.key} = 1
+          `).run(status.key, tenant.id);
+        }
+      }
+      db.prepare("INSERT INTO schema_migrations (name) VALUES (?)").run(statusMigration);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      db.close();
+      throw error;
+    }
+  }
   return db;
 }
 
-module.exports = { LOT_NAMES, VEHICLE_OPTIONS, VEHICLE_TYPES, openDatabase };
+module.exports = {
+  DEFAULT_STATUSES,
+  LOT_NAMES,
+  VEHICLE_OPTIONS,
+  VEHICLE_TYPES,
+  openDatabase,
+  seedTenantStatuses,
+};

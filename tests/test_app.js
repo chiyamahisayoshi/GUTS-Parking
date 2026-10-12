@@ -62,11 +62,25 @@ test("serves the browser UI but protects vehicle data until login", async () => 
 
 test("uses full-width parking cards and compact controls on phone layouts", () => {
   const stylesheet = fs.readFileSync(path.join(__dirname, "..", "static", "style.css"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "static", "index.html"), "utf8");
+  assert.ok(html.indexOf('id="status-panel"') < html.indexOf('class="board-workspace"'));
+  assert.match(html, /<details id="status-panel" open>/);
+  assert.match(html, /id="manage-statuses-button"/);
+  assert.match(html, /id="vehicle-status-options"/);
   const phoneLayout = stylesheet.slice(stylesheet.indexOf("@media (max-width: 560px)"));
   assert.match(phoneLayout, /\.parking-grid\s*\{\s*display:\s*grid;\s*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
   assert.match(phoneLayout, /\.lot-card\s*\{\s*width:\s*100%;\s*max-width:\s*100%/);
   assert.match(phoneLayout, /\.topbar\s*\{\s*min-height:\s*62px;\s*height:\s*auto/);
   assert.match(stylesheet, /\.lot-markings\.editable\.drawing\s*\{[^}]*touch-action:\s*none/);
+});
+
+test("keeps undo and edge auto-scroll controls wired into vehicle interactions", async () => {
+  const script = (await request(server).get("/static/app.js")).text;
+  assert.match(script, /undo\.textContent = "取り消し"/);
+  assert.match(script, /updateMarkings\(lot, markings\.slice\(0, -1\)\)/);
+  assert.match(script, /requestAnimationFrame\(autoScrollWhileDragging\)/);
+  assert.match(script, /window\.scrollBy\(0, scrollDelta\)/);
+  assert.match(script, /const edgeSize = Math\.min\(100, window\.innerHeight \* 0\.16\)/);
 });
 
 test("keeps HTTPS asset upgrades enabled when secure cookies are configured", async () => {
@@ -124,6 +138,7 @@ test("creates vehicles in separate positions and validates updates", async () =>
   });
   assert.equal(first.status, 201);
   assert.equal(first.body.unwashed, true);
+  assert.equal(first.body.status_ids.length, 1);
   assert.deepEqual(first.body.options, ["ETC", "ナビ"]);
   assert.equal(Object.hasOwn(first.body, "board_section"), false);
   assert.deepEqual([first.body.position_x, first.body.position_y], [0.125, 0.0625]);
@@ -152,6 +167,47 @@ test("creates vehicles in separate positions and validates updates", async () =>
   })).status, 401);
 });
 
+test("manages tenant-specific vehicle statuses and removes deleted assignments", async () => {
+  const defaults = (await agent.get("/api/bootstrap")).body.statuses;
+  const unwashed = defaults.find((status) => status.key === "unwashed");
+  assert.ok(unwashed);
+  assert.ok((await agent.get("/api/bootstrap")).body.vehicles
+    .find((vehicle) => vehicle.id === vehicleId).status_ids.includes(unwashed.id));
+  const added = await agent.post("/api/statuses").send({ name: "書類確認待ち", icon: "📄" });
+  assert.equal(added.status, 201);
+  assert.equal(added.body.name, "書類確認待ち");
+  const customStatusId = added.body.id;
+  const assigned = await agent.patch(`/api/vehicles/${vehicleId}`).send({
+    status_ids: [customStatusId],
+  });
+  assert.equal(assigned.status, 200);
+  assert.deepEqual(assigned.body.status_ids, [customStatusId]);
+  assert.equal(assigned.body.unwashed, false);
+  assert.equal((await agent.get("/api/bootstrap")).body.statuses
+    .some((status) => status.id === customStatusId), true);
+
+  assert.equal((await agent.delete(`/api/statuses/${customStatusId}`)).status, 204);
+  const afterDelete = (await agent.get("/api/bootstrap")).body;
+  assert.equal(afterDelete.statuses.some((status) => status.id === customStatusId), false);
+  assert.deepEqual(afterDelete.vehicles.find((vehicle) => vehicle.id === vehicleId).status_ids, []);
+  assert.equal((await agent.post("/api/statuses").send({
+    name: "   ",
+  })).status, 422);
+  assert.equal((await agent.post("/api/statuses").send({
+    name: "洗車待ち",
+  })).status, 409);
+  assert.equal((await agent.post("/api/statuses").send({
+    name: "異常アイコン",
+    icon: { unsafe: true },
+  })).status, 422);
+  assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
+    status_ids: [customStatusId],
+  })).status, 422);
+
+  const restored = await agent.patch(`/api/vehicles/${vehicleId}`).send({ status_ids: [unwashed.id] });
+  assert.equal(restored.body.unwashed, true);
+});
+
 test("operator accounts can use the board but cannot add vehicles or manage locations", async () => {
   application.db.prepare("INSERT INTO users (username, password_hash, role, tenant_id) VALUES (?, ?, ?, 1)").run(
     "staff",
@@ -178,6 +234,11 @@ test("operator accounts can use the board but cannot add vehicles or manage loca
     vehicle_type: "A-1",
   })).status, 403);
   assert.equal((await staffAgent.post("/api/parking-lots").send({ name: "staff-add-denied" })).status, 403);
+  assert.equal((await staffAgent.post("/api/statuses").send({ name: "staff-add-denied" })).status, 403);
+  const adminStatus = await agent.post("/api/statuses").send({ name: "admin-only-status" });
+  assert.equal(adminStatus.status, 201);
+  assert.equal((await staffAgent.delete(`/api/statuses/${adminStatus.body.id}`)).status, 403);
+  assert.equal((await agent.delete(`/api/statuses/${adminStatus.body.id}`)).status, 204);
   assert.equal((await staffAgent.delete("/api/parking-lots/13")).status, 403);
   assert.equal((await staffAgent.delete("/api/franchises/2").send({ confirmation_name: "anything" })).status, 403);
   assert.equal((await staffAgent.patch("/api/parking-lots/1").send({ name: "staff-rename-denied" })).status, 403);
@@ -191,6 +252,9 @@ test("operator accounts can use the board but cannot add vehicles or manage loca
 });
 
 test("headquarters can create isolated franchise stores and suspend or restore access", async () => {
+  const headquartersOnlyStatus = await agent.post("/api/statuses")
+    .send({ name: "本店専用ステータス" });
+  assert.equal(headquartersOnlyStatus.status, 201);
   assert.equal((await agent.post("/api/franchises").send({
     name: "東店",
     username: "east-admin",
@@ -227,6 +291,8 @@ test("headquarters can create isolated franchise stores and suspend or restore a
   assert.equal(franchiseBoard.parking_lots.length, 13);
   assert.equal(new Set(franchiseBoard.parking_lots.map((lot) => lot.name)).size, 13);
   assert.equal(franchiseBoard.vehicles.length, 0);
+  assert.equal(franchiseBoard.statuses.some((status) =>
+    status.id === headquartersOnlyStatus.body.id), false);
   assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
     parking_lot_id: franchiseBoard.parking_lots[0].id,
   })).status, 422);
@@ -251,6 +317,15 @@ test("headquarters can create isolated franchise stores and suspend or restore a
     vehicle_type: "A-1",
   });
   assert.equal(franchiseVehicle.status, 201);
+  assert.equal((await franchiseAgent.patch(`/api/vehicles/${franchiseVehicle.body.id}`).send({
+    status_ids: [headquartersOnlyStatus.body.id],
+  })).status, 422);
+  const franchiseStatus = await franchiseAgent.post("/api/statuses")
+    .send({ name: "東店専用ステータス" });
+  assert.equal(franchiseStatus.status, 201);
+  assert.equal((await franchiseAgent.patch(`/api/vehicles/${franchiseVehicle.body.id}`).send({
+    status_ids: [franchiseStatus.body.id],
+  })).status, 200);
   assert.equal((await agent.patch(`/api/vehicles/${franchiseVehicle.body.id}`).send({ no_fuel: true })).status, 404);
   assert.equal((await franchiseAgent.patch(`/api/vehicles/${vehicleId}`).send({ no_fuel: true })).status, 404);
   assert.equal((await franchiseAgent.delete(`/api/vehicles/${vehicleId}`)).status, 404);
@@ -302,6 +377,7 @@ test("headquarters can create isolated franchise stores and suspend or restore a
     .send({ confirmation_name: franchise.name })).status, 204);
   const [deletionCode] = await deletionSocketClosed;
   assert.equal(deletionCode, 4004);
+  assert.equal((await agent.delete(`/api/statuses/${headquartersOnlyStatus.body.id}`)).status, 204);
   assert.equal((await franchiseAgent.get("/api/bootstrap")).status, 401);
   assert.equal(application.db.prepare("SELECT 1 FROM tenants WHERE id = ?").get(franchise.id), undefined);
   assert.equal(application.db.prepare("SELECT 1 FROM vehicles WHERE tenant_id = ?").get(franchise.id), undefined);
@@ -345,6 +421,15 @@ test("rejects cross-origin changes and broadcasts edits only to authenticated we
   });
   await once(websocket, "open");
   try {
+    const statusCreatedMessage = once(websocket, "message");
+    const statusCreated = await agent.post("/api/statuses")
+      .send({ name: "同期確認", icon: "📌" });
+    assert.equal(statusCreated.status, 201);
+    assert.deepEqual(JSON.parse((await statusCreatedMessage)[0].toString()), { type: "refresh" });
+    const statusDeletedMessage = once(websocket, "message");
+    assert.equal((await agent.delete(`/api/statuses/${statusCreated.body.id}`)).status, 204);
+    assert.deepEqual(JSON.parse((await statusDeletedMessage)[0].toString()), { type: "refresh" });
+
     const message = once(websocket, "message");
     const updated = await agent.patch(`/api/vehicles/${vehicleId}`).send({
       parking_lot_id: 2,
@@ -724,6 +809,11 @@ test("flattens previous board sections into peer locations without losing vehicl
       [0.37, 0.62, 1, 1],
     );
     assert.deepEqual(JSON.parse(vehicle.options), ["ETC"]);
+    assert.deepEqual(
+      migrated.prepare("SELECT s.key FROM vehicle_status_assignments a JOIN vehicle_statuses s ON s.id = a.status_id WHERE a.vehicle_id = ? ORDER BY s.key")
+        .all(vehicle.id).map((status) => status.key),
+      ["needs_repair", "unwashed"],
+    );
     assert.equal(migrated.prepare("SELECT COUNT(*) AS count FROM parking_lots").get().count, 13);
     const lot = migrated.prepare("SELECT * FROM parking_lots WHERE id = 4").get();
     assert.deepEqual([lot.display_order, lot.area_height, lot.area_width], [3, 210, 50]);
