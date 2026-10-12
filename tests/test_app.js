@@ -158,6 +158,8 @@ test("uses full-width parking cards and compact controls on phone layouts", () =
   assert.match(html, /id="manage-vehicle-statuses-button"/);
   assert.match(html, /<fieldset class="status-fields">[\s\S]*?id="manage-vehicle-statuses-button"[\s\S]*?<\/fieldset>/);
   assert.match(html, /車両状態評価シート/);
+  assert.match(html, /<label>クラス<select name="vehicle_type" required><\/select><\/label>/);
+  assert.doesNotMatch(html, /車種・タイプ/);
   assert.match(html, /assessment-fields[\s\S]*?name="notes"[\s\S]*?<\/section>/);
   assert.match(html, /車体の損傷位置/);
   assert.match(html, /id="inspection-car-view"[^>]*360度回転/);
