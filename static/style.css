@@ -173,15 +173,15 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
 .damage-type-button.dragging { opacity: .5; }
 .inspection-hint { min-height: 18px; margin: 8px 0 3px; color: var(--muted); font-size: 11px; }
 .inspection-car-view { position: relative; width: min(100%, 620px); margin: 0 auto; aspect-ratio: 600 / 340; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: radial-gradient(ellipse at 50% 55%, #fff 0, #f1f5f8 72%); touch-action: none; }
-.inspection-car-view > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-.inspection-markers { position: absolute; inset: 0; z-index: 2; }
-.inspection-marker { position: absolute; width: 30px; height: 30px; display: grid; place-items: center; padding: 0; transform: translate(-50%, -50%); border: 2px solid #fff; border-radius: 50%; box-shadow: 0 2px 8px #172b4d55; color: #fff; font-size: 14px; }
-.inspection-marker:hover { z-index: 3; scale: 1.12; }
+.inspection-car-view > canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.inspection-car-view > canvas:active { cursor: grabbing; }
+.inspection-car-loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 12px; pointer-events: none; }
 .inspection-car-hint { position: absolute; right: 8px; bottom: 7px; color: #718096; font-size: 9px; pointer-events: none; }
 .inspection-drag-ghost { position: fixed; z-index: 30; pointer-events: none; transform: translate(-50%, -50%); border-radius: 18px; padding: 7px 11px; color: #fff; font-size: 11px; box-shadow: 0 4px 15px #172b4d55; }
 .inspection-mark-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 .inspection-mark-entry { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 8px; padding: 5px 7px; color: #526176; font-size: 10px; }
 .inspection-mark-entry button { border: 0; background: transparent; color: #9a6260; font-size: 15px; line-height: 1; }
+.settings-inline-button { float: right; margin: -23px 0 6px; padding: 5px 8px; font-size: 10px; }
 .dialog-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
 .dialog-actions > span { flex: 1; }
 .danger-button { border: 1px solid #f0cbc8; border-radius: 8px; background: #fff; color: #a63e36; padding: 9px 12px; }

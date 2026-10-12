@@ -7,6 +7,7 @@ const { spawnSync } = require("node:child_process");
 const { after, before, test } = require("node:test");
 const { WebSocket } = require("ws");
 const request = require("supertest");
+const { openDatabase, seedTenantVehicleOptions } = require("../app/db");
 const { version: appVersion } = require("../package.json");
 
 process.env.SESSION_SECRET ||= "test-only-session-secret-value-123456";
@@ -59,6 +60,8 @@ test("serves the browser UI but protects vehicle data until login", async () => 
   const appScript = await request(server).get("/static/app.js");
   assert.equal(appScript.status, 200);
   assert.match(appScript.text, /setAppVersion/);
+  assert.equal((await request(server).get("/static/inspection3d.mjs")).status, 200);
+  assert.match((await request(server).get("/vendor/three.module.js")).headers["content-type"], /javascript/);
   assert.deepEqual((await request(server).get("/api/me")).body, { authenticated: false, version: appVersion });
   assert.equal((await request(server).get("/api/bootstrap")).status, 401);
   assert.equal((await agent.get("/api/bootstrap")).status, 401);
@@ -71,9 +74,12 @@ test("uses full-width parking cards and compact controls on phone layouts", () =
   assert.match(html, /<details id="status-panel" open>/);
   assert.match(html, /id="manage-statuses-button"/);
   assert.match(html, /id="vehicle-status-options"/);
+  assert.match(html, /id="manage-options-button"/);
+  assert.match(html, /id="manage-vehicle-statuses-button"/);
   assert.match(html, /車両状態評価シート/);
   assert.match(html, /車体の損傷位置/);
-  assert.match(html, /id="inspection-car-view"[^>]*3Dイメージ/);
+  assert.match(html, /id="inspection-car-view"[^>]*360度回転/);
+  assert.match(html, /static\/inspection3d\.mjs/);
   assert.match(html, /id="assessment-manager-dialog"/);
   const phoneLayout = stylesheet.slice(stylesheet.indexOf("@media (max-width: 560px)"));
   assert.match(phoneLayout, /\.parking-grid\s*\{\s*display:\s*grid;\s*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
@@ -85,6 +91,8 @@ test("uses full-width parking cards and compact controls on phone layouts", () =
 test("keeps undo and edge auto-scroll controls wired into vehicle interactions", async () => {
   const script = (await request(server).get("/static/app.js")).text;
   assert.match(script, /undo\.textContent = "取り消し"/);
+  assert.match(script, /保存済みの最後の線を削除して保存します/);
+  assert.match(script, /指を離すと自動保存されます/);
   assert.match(script, /updateMarkings\(lot, markings\.slice\(0, -1\)\)/);
   assert.match(script, /requestAnimationFrame\(autoScrollWhileDragging\)/);
   assert.match(script, /window\.scrollBy\(0, scrollDelta\)/);
@@ -169,6 +177,30 @@ test("creates vehicles in separate positions and validates updates", async () =>
   assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({ vehicle_type: "unknown" })).status, 422);
   assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({ board_section: "unknown" })).status, 422);
   assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({ options: ["unknown"] })).status, 422);
+  const customOption = await agent.post("/api/vehicle-options").send({ name: "ドラレコ" });
+  assert.equal(customOption.status, 201);
+  const customOptionsSaved = await agent.patch(`/api/vehicles/${vehicleId}`).send({
+    options: ["ETC", customOption.body.name],
+  });
+  assert.equal(customOptionsSaved.status, 200);
+  assert.deepEqual(customOptionsSaved.body.options, ["ETC", "ドラレコ"]);
+  assert.equal((await agent.get("/api/bootstrap")).body.vehicle_options
+    .some((option) => option.id === customOption.body.id), true);
+  assert.equal((await agent.post("/api/vehicle-options").send({ name: "ドラレコ" })).status, 409);
+  assert.equal((await agent.delete(`/api/vehicle-options/${customOption.body.id}`)).status, 204);
+  assert.deepEqual((await agent.get("/api/bootstrap")).body.vehicles
+    .find((vehicle) => vehicle.id === vehicleId).options, ["ETC"]);
+  assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
+    options: ["ドラレコ"],
+  })).status, 422);
+  const navigationOption = (await agent.get("/api/bootstrap")).body.vehicle_options
+    .find((option) => option.name === "ナビ");
+  assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
+    options: ["ETC", "ナビ"],
+  })).status, 200);
+  assert.equal((await agent.delete(`/api/vehicle-options/${navigationOption.id}`)).status, 204);
+  assert.deepEqual((await agent.get("/api/bootstrap")).body.vehicles
+    .find((vehicle) => vehicle.id === vehicleId).options, ["ETC"]);
   assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({ unknown: true })).status, 422);
   assert.equal((await request(server).post("/api/vehicles").send({
     plate: "No auth",
@@ -244,7 +276,15 @@ test("persists editable vehicle assessment fields and damage marks", async () =>
     color: "#336699",
   });
   assert.equal(customDamage.status, 201);
-  const mark = { id: "scratch-front-left", damage_type_id: scratch.id, x: 0.21, y: 0.42 };
+  const mark = {
+    id: "scratch-front-left",
+    damage_type_id: scratch.id,
+    x: 0.21,
+    y: 0.42,
+    world_x: -1.25,
+    world_y: 0.9,
+    world_z: 0.79,
+  };
   const updated = await agent.patch(`/api/vehicles/${vehicleId}`).send({
     assessment_values: {
       [exterior.id]: "4",
@@ -270,6 +310,10 @@ test("persists editable vehicle assessment fields and damage marks", async () =>
     [updated.body.inspection_marks[0].x, updated.body.inspection_marks[0].y],
     [0.21, 0.42],
   );
+  assert.deepEqual(
+    [updated.body.inspection_marks[0].world_x, updated.body.inspection_marks[0].world_y, updated.body.inspection_marks[0].world_z],
+    [-1.25, 0.9, 0.79],
+  );
   const boardVehicle = (await agent.get("/api/bootstrap")).body.vehicles
     .find((vehicle) => vehicle.id === vehicleId);
   assert.equal(boardVehicle.assessment_values[year.id], "2022");
@@ -283,6 +327,9 @@ test("persists editable vehicle assessment fields and damage marks", async () =>
   })).status, 422);
   assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
     inspection_marks: [{ ...mark, x: 1.1 }],
+  })).status, 422);
+  assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
+    inspection_marks: [{ ...mark, world_z: 4 }],
   })).status, 422);
   assert.equal((await agent.post("/api/assessment-fields").send({
     name: "不正形式",
@@ -332,6 +379,7 @@ test("operator accounts can use the board but cannot add vehicles or manage loca
   })).status, 403);
   assert.equal((await staffAgent.post("/api/parking-lots").send({ name: "staff-add-denied" })).status, 403);
   assert.equal((await staffAgent.post("/api/statuses").send({ name: "staff-add-denied" })).status, 403);
+  assert.equal((await staffAgent.post("/api/vehicle-options").send({ name: "staff-add-denied" })).status, 403);
   const adminStatus = await agent.post("/api/statuses").send({ name: "admin-only-status" });
   assert.equal(adminStatus.status, 201);
   assert.equal((await staffAgent.delete(`/api/statuses/${adminStatus.body.id}`)).status, 403);
@@ -403,6 +451,12 @@ test("headquarters can create isolated franchise stores and suspend or restore a
     field.id === headquartersOnlyField.body.id), false);
   assert.equal(franchiseBoard.damage_types.some((type) =>
     type.id === headquartersOnlyDamage.body.id), false);
+  assert.equal(franchiseBoard.vehicle_options.some((option) => option.name === "ドラレコ"), false);
+  assert.ok(franchiseBoard.vehicle_options.some((option) => option.name === "ETC"));
+  const franchiseOption = await franchiseAgent.post("/api/vehicle-options").send({ name: "東店専用装備" });
+  assert.equal(franchiseOption.status, 201);
+  assert.equal((await agent.get("/api/bootstrap")).body.vehicle_options
+    .some((option) => option.id === franchiseOption.body.id), false);
   assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
     parking_lot_id: franchiseBoard.parking_lots[0].id,
   })).status, 422);
@@ -838,6 +892,34 @@ test("saves, validates, and clears colored parking location lines", async () => 
     (await agent.get("/api/bootstrap")).body.parking_lots.find((entry) => entry.id === lot.id).markings,
     [],
   );
+});
+
+test("keeps a deleted built-in vehicle option removed after restart", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rentalcar-options-"));
+  const databasePath = path.join(directory, "options.sqlite");
+  try {
+    const database = openDatabase(databasePath);
+    const option = database.prepare(
+      "SELECT id, built_in_key FROM vehicle_option_types WHERE tenant_id = 1 AND name = 'ETC'",
+    ).get();
+    database.prepare(
+      "INSERT INTO vehicle_option_suppressions (tenant_id, built_in_key) VALUES (1, ?)",
+    ).run(option.built_in_key);
+    database.prepare("DELETE FROM vehicle_option_types WHERE id = ?").run(option.id);
+    seedTenantVehicleOptions(database, 1);
+    assert.equal(database.prepare(
+      "SELECT 1 FROM vehicle_option_types WHERE tenant_id = 1 AND name = 'ETC'",
+    ).get(), undefined);
+    database.close();
+
+    const reopened = openDatabase(databasePath);
+    assert.equal(reopened.prepare(
+      "SELECT 1 FROM vehicle_option_types WHERE tenant_id = 1 AND name = 'ETC'",
+    ).get(), undefined);
+    reopened.close();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("deletes empty parking locations but protects occupied locations and tenant data", async () => {
