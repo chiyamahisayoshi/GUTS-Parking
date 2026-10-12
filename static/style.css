@@ -358,3 +358,7 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
 .language-select { border: 1px solid #d9e2e9; border-radius: 8px; background: #fff; color: var(--ink); padding: 7px 9px; font-size: 13px; }
 .login-language { position: fixed; top: 14px; right: 14px; z-index: 5; }
 .login-screen { position: relative; }
+.dialog-heading { position: sticky; top: 0; z-index: 20; background: #fff; padding: 10px 0; margin-top: -10px; border-bottom: 1px solid var(--border); }
+.heading-actions { display: flex; align-items: center; gap: 8px; }
+.heading-actions .quiet-button, .heading-actions .primary-button { padding: 8px 12px; white-space: nowrap; }
+.dialog-heading .close-button { padding: 0 6px; line-height: 1; }
