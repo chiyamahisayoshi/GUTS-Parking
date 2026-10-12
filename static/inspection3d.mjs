@@ -28,9 +28,9 @@ scene.add(fillLight);
 const car = new THREE.Group();
 scene.add(car);
 const paint = new THREE.MeshPhysicalMaterial({
-  color: "#5489ae",
-  metalness: 0.48,
-  roughness: 0.26,
+  color: "#d8e3e9",
+  metalness: 0.22,
+  roughness: 0.3,
   clearcoat: 0.9,
   clearcoatRoughness: 0.2,
 });
@@ -128,7 +128,7 @@ let phi = 1.18;
 const radius = 7.7;
 let pointer = null;
 let diagramState = { marks: [], damageTypes: [], selectedTypeId: null };
-let damageMeshes = [];
+let damageGroups = [];
 let renderScheduled = false;
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
@@ -165,7 +165,7 @@ function coordinatesAt(clientX, clientY) {
     -((clientY - rect.top) / rect.height) * 2 + 1,
   );
   raycaster.setFromCamera(pointerNdc, camera);
-  return { rect, hits: raycaster.intersectObjects([...damageMeshes, ...surfaceMeshes], false) };
+  return { rect, hits: raycaster.intersectObjects([...damageGroups, ...surfaceMeshes], true) };
 }
 
 function worldPosition(mark) {
@@ -176,26 +176,61 @@ function worldPosition(mark) {
 }
 
 function renderDamageMarks() {
-  for (const mesh of damageMeshes) {
-    car.remove(mesh);
-    mesh.geometry.dispose();
-    mesh.material.dispose();
+  for (const group of damageGroups) {
+    car.remove(group);
+    group.traverse((object) => {
+      object.geometry?.dispose();
+      if (Array.isArray(object.material)) object.material.forEach((material) => material.dispose());
+      else object.material?.dispose();
+    });
   }
-  damageMeshes = [];
+  damageGroups = [];
+  const markerMaterial = new THREE.MeshStandardMaterial({
+    color: "#ff1525",
+    emissive: "#b9000b",
+    emissiveIntensity: 1.8,
+    roughness: 0.28,
+    metalness: 0,
+    depthWrite: false,
+  });
   const types = new Map(diagramState.damageTypes.map((type) => [type.id, type]));
   for (const mark of diagramState.marks) {
     const type = types.get(mark.damage_type_id);
     if (!type) continue;
-    const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.075, 12, 10),
-      new THREE.MeshStandardMaterial({ color: type.color, emissive: type.color, emissiveIntensity: 0.35 }),
-    );
-    mesh.position.copy(worldPosition(mark));
-    mesh.userData.markId = mark.id;
-    mesh.castShadow = true;
-    mesh.renderOrder = 5;
-    car.add(mesh);
-    damageMeshes.push(mesh);
+    const group = new THREE.Group();
+    group.position.copy(worldPosition(mark));
+    const normal = new THREE.Vector3(mark.world_nx ?? 0, mark.world_ny ?? 0, mark.world_nz ?? 1);
+    if (normal.lengthSq() < 0.01) normal.set(0, 0, 1);
+    normal.normalize();
+    group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+    const isScratch = type.built_in_key === "scratch" || type.name.includes("傷");
+    let geometry;
+    if (isScratch) {
+      const points = [];
+      for (let index = 0; index <= 24; index += 1) {
+        const progress = index / 24;
+        points.push(new THREE.Vector3(
+          (progress - 0.5) * 0.42,
+          Math.sin(progress * Math.PI * 6) * 0.045,
+          0,
+        ));
+      }
+      geometry = new THREE.TubeGeometry(
+        new THREE.CatmullRomCurve3(points),
+        48,
+        0.022,
+        8,
+        false,
+      );
+    } else {
+      geometry = new THREE.TorusGeometry(0.115, 0.026, 10, 40);
+    }
+    const marker = new THREE.Mesh(geometry, markerMaterial);
+    marker.userData.markId = mark.id;
+    marker.renderOrder = 10;
+    group.add(marker);
+    car.add(group);
+    damageGroups.push(group);
   }
   scheduleRender();
 }
@@ -203,7 +238,7 @@ function renderDamageMarks() {
 function addMark(typeId, hit) {
   const normalMatrix = new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld);
   const surfaceNormal = hit.face.normal.clone().applyMatrix3(normalMatrix).normalize();
-  const point = hit.point.clone().addScaledVector(surfaceNormal, 0.055);
+  const point = hit.point.clone().addScaledVector(surfaceNormal, 0.035);
   const mark = {
     id: crypto.randomUUID(),
     damage_type_id: typeId,
@@ -212,6 +247,9 @@ function addMark(typeId, hit) {
     world_x: point.x,
     world_y: point.y,
     world_z: point.z,
+    world_nx: surfaceNormal.x,
+    world_ny: surfaceNormal.y,
+    world_nz: surfaceNormal.z,
   };
   view.dispatchEvent(new CustomEvent("inspection:mark", { detail: mark }));
 }
@@ -261,7 +299,7 @@ renderer.domElement.addEventListener("pointerup", (event) => {
   if (!diagramState.selectedTypeId) return;
   const surfaceHit = hits.find((hit) => surfaceMeshes.includes(hit.object));
   if (!surfaceHit) {
-    view.querySelector(".inspection-car-hint").textContent = "損傷位置を記録するには車体表面をタップしてください。";
+    view.querySelector(".inspection-car-hint").textContent = "損傷位置を記録するには車体表面までアイコンをドラッグしてください。";
     return;
   }
   addMark(diagramState.selectedTypeId, surfaceHit);

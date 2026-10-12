@@ -35,7 +35,6 @@
   let resizing = null;
   let editingLotId = null;
   let drawingLotId = null;
-  let selectedMarking = null;
   let markingError = "";
   const markingColors = new Map();
   const markingSaveChains = new Map();
@@ -43,10 +42,18 @@
   let suppressClick = false;
 
   async function api(path, options = {}) {
-    const response = await fetch(path, {
-      ...options,
-      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    });
+    let response;
+    try {
+      response = await fetch(path, {
+        ...options,
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      });
+    } catch (error) {
+      throw new Error(
+        "サーバーに接続できません。VPSのアプリ稼働状態、HTTPS、リバースプロキシの設定を確認してください。",
+        { cause: error },
+      );
+    }
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       if (response.status === 401 && path !== "/api/login") showLogin();
@@ -206,7 +213,6 @@
         const nextEditingLotId = editingLotId === lot.id ? null : lot.id;
         if (nextEditingLotId !== editingLotId) drawingLotId = null;
         editingLotId = nextEditingLotId;
-        selectedMarking = null;
         markingError = "";
         render();
       });
@@ -256,16 +262,9 @@
       line.setAttribute("x2", marking.x2 * 1000);
       line.setAttribute("y2", marking.y2 * 1000);
       line.setAttribute("stroke", marking.color);
-      line.setAttribute("stroke-width", selectedMarking === marking.id ? "10" : "7");
+      line.setAttribute("stroke-width", "7");
       line.setAttribute("stroke-linecap", "round");
-      line.setAttribute("pointer-events", editingLotId === lot.id ? "stroke" : "none");
-      if (selectedMarking === marking.id) line.classList.add("selected");
-      line.addEventListener("pointerdown", (event) => {
-        if (editingLotId !== lot.id || drawingLotId === lot.id) return;
-        event.stopPropagation();
-        selectedMarking = marking.id;
-        render();
-      });
+      line.setAttribute("pointer-events", "none");
       svg.append(line);
     }
     if (editingLotId === lot.id && drawingLotId === lot.id) {
@@ -289,7 +288,6 @@
       draw.addEventListener("click", () => {
         if (drawingLotId === lot.id) cancelDraftMarking(lot.id);
         drawingLotId = drawingLotId === lot.id ? null : lot.id;
-        selectedMarking = null;
         render();
       });
       const color = document.createElement("input");
@@ -302,14 +300,6 @@
         const preview = card.querySelector(".marking-preview");
         if (preview) preview.setAttribute("stroke", color.value);
       });
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "danger-button";
-      remove.textContent = "選択した線を削除";
-      remove.disabled = !selectedMarking;
-      remove.addEventListener("click", () => {
-        updateMarkings(lot, markings.filter((marking) => marking.id !== selectedMarking));
-      });
       const undo = document.createElement("button");
       undo.type = "button";
       undo.className = "lot-control";
@@ -320,12 +310,12 @@
         if (!markings.length) return;
         updateMarkings(lot, markings.slice(0, -1));
       });
-      tools.append(draw, color, undo, remove);
+      tools.append(draw, color, undo);
       const guidance = document.createElement("span");
       guidance.className = "lot-marking-guidance";
       guidance.textContent = drawingLotId === lot.id
         ? "位置内をドラッグして直線を引きます。線は指を離すと自動保存されます。"
-        : "線を描くと自動保存されます。選択削除または取り消しも保存されます。";
+        : "線を描くと自動保存されます。取り消しで最後の線を削除できます。";
       tools.append(guidance);
       if (markingError) {
         const error = document.createElement("span");
@@ -370,7 +360,9 @@
     preview?.setAttribute("y1", point.y * 1000);
     preview?.setAttribute("x2", point.x * 1000);
     preview?.setAttribute("y2", point.y * 1000);
-    svg.setPointerCapture(event.pointerId);
+    document.addEventListener("pointermove", moveMarking, true);
+    document.addEventListener("pointerup", finishMarking, true);
+    document.addEventListener("pointercancel", cancelMarking, true);
   }
 
   function moveMarking(event) {
@@ -392,6 +384,7 @@
     moveMarking(event);
     const draft = draftMarking;
     draftMarking = null;
+    removeMarkingPointerListeners();
     const markings = Array.isArray(lot.markings) ? lot.markings : [];
     if (Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1) < 0.01) {
       render();
@@ -414,9 +407,23 @@
     }
   }
 
+  function finishMarking(event) {
+    if (!draftMarking || event.pointerId !== draftMarking.pointerId) return;
+    const lot = lots.find((entry) => entry.id === draftMarking.lotId);
+    const svg = document.querySelector(`.lot-markings[data-lot-id="${draftMarking.lotId}"]`);
+    if (lot && svg) endMarking(event, lot, svg);
+  }
+
+  function removeMarkingPointerListeners() {
+    document.removeEventListener("pointermove", moveMarking, true);
+    document.removeEventListener("pointerup", finishMarking, true);
+    document.removeEventListener("pointercancel", cancelMarking, true);
+  }
+
   function cancelDraftMarking(lotId) {
     if (draftMarking?.lotId !== lotId) return;
     draftMarking = null;
+    removeMarkingPointerListeners();
     document.querySelector(`.lot-markings[data-lot-id="${lotId}"] .marking-preview`)?.removeAttribute("x1");
   }
 
@@ -425,14 +432,25 @@
     const revision = (markingSaveRevisions.get(lot.id) || 0) + 1;
     markingSaveRevisions.set(lot.id, revision);
     lot.markings = markings;
-    selectedMarking = null;
     markingError = "";
     render();
     const previousSave = markingSaveChains.get(lot.id) || Promise.resolve();
-    const save = previousSave.catch(() => {}).then(async () => api(`/api/parking-lots/${lot.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ markings }),
-    }));
+    const save = previousSave.catch(() => {}).then(async () => {
+      let lastError;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          return await api(`/api/parking-lots/${lot.id}/markings`, {
+            method: "POST",
+            body: JSON.stringify({ markings }),
+          });
+        } catch (error) {
+          lastError = error;
+          if (!(error.cause instanceof TypeError) || attempt === 2) throw error;
+          await new Promise((resolve) => window.setTimeout(resolve, 300 * (attempt + 1)));
+        }
+      }
+      throw lastError;
+    });
     markingSaveChains.set(lot.id, save);
     try {
       const updated = await save;
@@ -693,13 +711,13 @@
 
   document.addEventListener("pointermove", moveDrag);
   document.addEventListener("pointermove", moveResize);
-  document.addEventListener("pointermove", moveInspectionIssueDrag);
+  document.addEventListener("pointermove", moveInspectionIssueDrag, true);
   document.addEventListener("pointerup", (event) => endDrag(event));
   document.addEventListener("pointerup", (event) => endResize(event));
-  document.addEventListener("pointerup", endInspectionIssueDrag);
+  document.addEventListener("pointerup", endInspectionIssueDrag, true);
   document.addEventListener("pointercancel", (event) => endDrag(event, true));
   document.addEventListener("pointercancel", (event) => endResize(event, true));
-  document.addEventListener("pointercancel", endInspectionIssueDrag);
+  document.addEventListener("pointercancel", cancelInspectionIssueDrag, true);
 
   function populateVehicleTypeChoices() {
     const select = vehicleForm.elements.vehicle_type;
@@ -1088,7 +1106,7 @@
         }
         selectedDamageTypeId = type.id;
         renderInspectionDiagram();
-        hint.textContent = `${type.icon} ${type.name}を車体図の位置でタップして記録します。`;
+        hint.textContent = `${type.icon} ${type.name}を車体表面までドラッグして記録してください。`;
       });
       palette.append(button);
     }
@@ -1117,9 +1135,9 @@
       markList.append(entry);
     });
     hint.textContent = selectedDamageTypeId
-      ? `${damageTypes.find((type) => type.id === selectedDamageTypeId)?.name || ""}：車体図をタップして記録`
+    ? `${damageTypes.find((type) => type.id === selectedDamageTypeId)?.name || ""}：アイコンを車体図までドラッグして記録`
       : damageTypes.length
-        ? "問題の種類を選び、回転できる車体モデルの表面をタップしてください。"
+      ? "傷または凹みのアイコンを押したまま、3D車体の表面までドラッグしてください。"
         : "先に問題種類を追加してください。";
   }
 
@@ -1143,7 +1161,6 @@
       moved: false,
       button,
     };
-    button.setPointerCapture(event.pointerId);
   }
 
   function moveInspectionIssueDrag(event) {
@@ -1184,6 +1201,13 @@
       }
       window.setTimeout(() => { suppressDamageClick = false; }, 0);
     }
+  }
+
+  function cancelInspectionIssueDrag(event) {
+    if (!inspectionIssueDrag || event.pointerId !== inspectionIssueDrag.pointerId) return;
+    inspectionIssueDrag.ghost?.remove();
+    inspectionIssueDrag.button.classList.remove("dragging");
+    inspectionIssueDrag = null;
   }
 
   function renderAssessmentManager() {

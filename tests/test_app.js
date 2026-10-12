@@ -90,6 +90,13 @@ test("uses full-width parking cards and compact controls on phone layouts", () =
   assert.match(phoneLayout, /\.topbar\s*\{\s*min-height:\s*62px;\s*height:\s*auto/);
   assert.match(stylesheet, /\.lot-markings\.editable\.drawing\s*\{[^}]*touch-action:\s*none/);
   assert.match(script, /classList\.add\("marking-canvas"\)/);
+  assert.doesNotMatch(script, /選択した線を削除/);
+  assert.match(script, /\/markings`,\s*\{\s*method:\s*"POST"/);
+  const issueDrag = script.slice(
+    script.indexOf("function startInspectionIssueDrag"),
+    script.indexOf("function moveInspectionIssueDrag"),
+  );
+  assert.doesNotMatch(issueDrag, /setPointerCapture/);
 });
 
 test("keeps undo and edge auto-scroll controls wired into vehicle interactions", async () => {
@@ -288,6 +295,9 @@ test("persists editable vehicle assessment fields and damage marks", async () =>
     world_x: -1.25,
     world_y: 0.9,
     world_z: 0.79,
+    world_nx: 0,
+    world_ny: 0,
+    world_nz: 1,
   };
   const updated = await agent.patch(`/api/vehicles/${vehicleId}`).send({
     notes: "冬タイヤはトランクに保管しています。",
@@ -320,6 +330,10 @@ test("persists editable vehicle assessment fields and damage marks", async () =>
     [updated.body.inspection_marks[0].world_x, updated.body.inspection_marks[0].world_y, updated.body.inspection_marks[0].world_z],
     [-1.25, 0.9, 0.79],
   );
+  assert.deepEqual(
+    [updated.body.inspection_marks[0].world_nx, updated.body.inspection_marks[0].world_ny, updated.body.inspection_marks[0].world_nz],
+    [0, 0, 1],
+  );
   const boardVehicle = (await agent.get("/api/bootstrap")).body.vehicles
     .find((vehicle) => vehicle.id === vehicleId);
   assert.equal(boardVehicle.assessment_values[year.id], "2022");
@@ -337,6 +351,9 @@ test("persists editable vehicle assessment fields and damage marks", async () =>
   })).status, 422);
   assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
     inspection_marks: [{ ...mark, world_z: 4 }],
+  })).status, 422);
+  assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
+    inspection_marks: [{ ...mark, world_nz: 2 }],
   })).status, 422);
   assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
     notes: "x".repeat(5001),
@@ -890,9 +907,14 @@ test("saves, validates, and clears colored parking location lines", async () => 
     x2: 0.9,
     y2: 0.75,
   }];
-  const saved = await agent.patch(`/api/parking-lots/${lot.id}`).send({ markings });
+  const saved = await agent.post(`/api/parking-lots/${lot.id}/markings`).send({ markings });
   assert.equal(saved.status, 200);
   assert.deepEqual(saved.body.markings, markings);
+  assert.equal((await request(server).post(`/api/parking-lots/${lot.id}/markings`).send({ markings })).status, 401);
+  assert.equal((await agent.post(`/api/parking-lots/${lot.id}/markings`).send({
+    markings,
+    name: "should-not-be-accepted",
+  })).status, 422);
   assert.deepEqual(
     (await agent.get("/api/bootstrap")).body.parking_lots.find((entry) => entry.id === lot.id).markings,
     markings,
@@ -906,7 +928,7 @@ test("saves, validates, and clears colored parking location lines", async () => 
   assert.equal((await agent.patch(`/api/parking-lots/${lot.id}`).send({
     markings: Array.from({ length: 101 }, (_, index) => ({ ...markings[0], id: `line-${index}` })),
   })).status, 422);
-  assert.equal((await agent.patch(`/api/parking-lots/${lot.id}`).send({ markings: [] })).status, 200);
+  assert.equal((await agent.post(`/api/parking-lots/${lot.id}/markings`).send({ markings: [] })).status, 200);
   assert.deepEqual(
     (await agent.get("/api/bootstrap")).body.parking_lots.find((entry) => entry.id === lot.id).markings,
     [],
