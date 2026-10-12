@@ -126,6 +126,7 @@ function openDatabase(databasePath) {
       no_fuel INTEGER NOT NULL DEFAULT 0 CHECK(no_fuel IN (0, 1)),
       needs_repair INTEGER NOT NULL DEFAULT 0 CHECK(needs_repair IN (0, 1)),
       options TEXT NOT NULL DEFAULT '[]',
+      notes TEXT NOT NULL DEFAULT '',
       tenant_id INTEGER NOT NULL REFERENCES tenants(id)
     );
     CREATE TABLE IF NOT EXISTS sessions (
@@ -174,6 +175,9 @@ function openDatabase(databasePath) {
   }
   if (!columns.has("options")) {
     db.exec("ALTER TABLE vehicles ADD COLUMN options TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!columns.has("notes")) {
+    db.exec("ALTER TABLE vehicles ADD COLUMN notes TEXT NOT NULL DEFAULT ''");
   }
   const headquartersId = db.prepare("SELECT id FROM tenants WHERE is_headquarters = 1").get()?.id;
   if (!headquartersId) throw new Error("Headquarters tenant is missing.");
@@ -238,13 +242,14 @@ function openDatabase(databasePath) {
           no_fuel INTEGER NOT NULL DEFAULT 0 CHECK(no_fuel IN (0, 1)),
           needs_repair INTEGER NOT NULL DEFAULT 0 CHECK(needs_repair IN (0, 1)),
           options TEXT NOT NULL DEFAULT '[]',
+          notes TEXT NOT NULL DEFAULT '',
           tenant_id INTEGER NOT NULL REFERENCES tenants(id)
         );
         INSERT INTO vehicles_tenant_new
           (id, external_id, plate, vehicle_type, parking_lot_id, position_x, position_y,
-           unwashed, no_fuel, needs_repair, options, tenant_id)
+           unwashed, no_fuel, needs_repair, options, notes, tenant_id)
         SELECT id, external_id, plate, vehicle_type, parking_lot_id, position_x, position_y,
-               unwashed, no_fuel, needs_repair, options, tenant_id
+               unwashed, no_fuel, needs_repair, options, notes, tenant_id
         FROM vehicles;
         DROP TABLE vehicles;
         ALTER TABLE vehicles_tenant_new RENAME TO vehicles;
