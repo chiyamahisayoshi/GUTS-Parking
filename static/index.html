@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8">
@@ -78,8 +78,7 @@
       <div class="board-workspace">
         <section id="parking-grid" class="parking-grid" aria-label="駐車場・貸出場所"></section>
         <aside class="vehicle-catalog" aria-labelledby="catalog-title">
-          <div class="catalog-heading"><h2 id="catalog-title">車両一覧</h2><span id="catalog-total" class="muted"></span></div>
-          <input type="search" id="catalog-search" class="catalog-search" placeholder="車牌号で検索" aria-label="車牌号で検索" autocomplete="off">
+          <div class="catalog-heading"><h2 id="catalog-title">車両一覧</h2><input type="search" id="catalog-search" class="catalog-search" placeholder="車番で検索" aria-label="車番で検索" autocomplete="off"><span id="catalog-total" class="muted"></span></div>
           <div id="vehicle-type-filters" class="catalog-filters" role="group" aria-label="車種で絞り込み">
             <button class="type-filter active" data-vehicle-type="all">All</button>
           </div>
@@ -183,11 +182,12 @@
       </div>
       <form id="add-job-form" class="add-job-form" autocomplete="off">
         <div class="job-time-field">
-          <label>日時 <small class="hint">貼り付け用</small>
-            <input name="scheduled_at" id="job-time-text" required placeholder="2026/10/13 10:30" inputmode="numeric">
-          </label>
-          <label><small class="hint">手入力</small>
-            <input type="datetime-local" id="job-time-picker" aria-label="日時を手入力">
+          <label>日時 <small class="hint">貼り付け用可</small>
+            <span class="job-time-inputs">
+              <input name="scheduled_at" id="job-time-text" required placeholder="2026/10/13 10:30" inputmode="numeric">
+              <button type="button" id="job-time-button" class="quiet-button" aria-label="カレンダーから選択">📅</button>
+              <input type="datetime-local" id="job-time-picker" class="job-time-picker" tabindex="-1" aria-hidden="true">
+            </span>
           </label>
         </div>
         <label class="job-plate-field">車両ナンバー

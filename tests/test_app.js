@@ -1,4 +1,4 @@
-const assert = require("node:assert/strict");
+﻿const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const { once } = require("node:events");
 const os = require("node:os");
@@ -1200,8 +1200,8 @@ test("wires catalog search, token blink and labelled job time inputs", () => {
   const script = fs.readFileSync(path.join(__dirname, "../static/app.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "../static/style.css"), "utf8");
   assert.match(html, /id="catalog-search"/);
-  assert.match(html, /貼り付け用/);
-  assert.match(html, /手入力/);
+  assert.match(html, /貼り付け用可/);
+  assert.match(html, /車番で検索/);
   assert.match(script, /token-blink/);
   assert.match(script, /catalog-search/);
   assert.match(css, /@keyframes token-blink/);

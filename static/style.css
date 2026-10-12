@@ -350,3 +350,8 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
 .catalog-search { width: 100%; box-sizing: border-box; border: 1px solid #d9e2e9; border-radius: 8px; padding: 9px 11px; margin-bottom: 8px; color: var(--ink); }
 @keyframes token-blink { 0%, 100% { box-shadow: 0 0 0 0 #ffb300; transform: translate(-50%, -50%) scale(1); } 25%, 75% { box-shadow: 0 0 0 8px #ffb300cc; transform: translate(-50%, -50%) scale(1.25); } 50% { box-shadow: 0 0 0 0 #ffb300; transform: translate(-50%, -50%) scale(1); } }
 .vehicle-token.token-blink { animation: token-blink .8s ease-in-out 2; z-index: 20; }
+.catalog-heading { gap: 8px; }
+.catalog-search { flex: 1; min-width: 0; width: auto; margin: 0; padding: 6px 9px; font-size: 13px; }
+.job-time-inputs { position: relative; display: flex; gap: 6px; }
+.job-time-inputs #job-time-text { flex: 1; }
+.job-time-picker { position: absolute; right: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
