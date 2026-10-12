@@ -13,10 +13,18 @@
   const franchiseError = document.querySelector("#franchise-error");
   const statusDialog = document.querySelector("#status-dialog");
   const statusError = document.querySelector("#status-error");
+  const assessmentManagerDialog = document.querySelector("#assessment-manager-dialog");
+  const assessmentManagerError = document.querySelector("#assessment-manager-error");
   let lots = [];
   let vehicles = [];
   let vehicleTypes = [];
   let statuses = [];
+  let assessmentFields = [];
+  let damageTypes = [];
+  let inspectionMarks = [];
+  let selectedDamageTypeId = null;
+  let inspectionIssueDrag = null;
+  let suppressDamageClick = false;
   let canManage = false;
   let canManageFranchises = false;
   let activeVehicleType = "all";
@@ -81,6 +89,11 @@
     vehicles = data.vehicles;
     vehicleTypes = data.vehicle_types;
     statuses = data.statuses || [];
+    assessmentFields = data.assessment_fields || [];
+    damageTypes = data.damage_types || [];
+    const availableDamageTypeIds = new Set(damageTypes.map((type) => type.id));
+    inspectionMarks = inspectionMarks.filter((mark) => availableDamageTypeIds.has(mark.damage_type_id));
+    if (!availableDamageTypeIds.has(selectedDamageTypeId)) selectedDamageTypeId = null;
     if (activeStatus !== "all" && !statuses.some((status) => String(status.id) === activeStatus)) {
       activeStatus = "all";
     }
@@ -108,6 +121,7 @@
     renderVehicleCatalog(vehicles);
     renderStatusFilters();
     renderStatusList(vehicles);
+    if (!dialog.open) renderInspectionDiagram();
   }
 
   function makeParkingCard(lot, inLot) {
@@ -638,10 +652,13 @@
 
   document.addEventListener("pointermove", moveDrag);
   document.addEventListener("pointermove", moveResize);
+  document.addEventListener("pointermove", moveInspectionIssueDrag);
   document.addEventListener("pointerup", (event) => endDrag(event));
   document.addEventListener("pointerup", (event) => endResize(event));
+  document.addEventListener("pointerup", endInspectionIssueDrag);
   document.addEventListener("pointercancel", (event) => endDrag(event, true));
   document.addEventListener("pointercancel", (event) => endResize(event, true));
+  document.addEventListener("pointercancel", endInspectionIssueDrag);
 
   function populateVehicleTypeChoices() {
     const select = vehicleForm.elements.vehicle_type;
@@ -819,6 +836,336 @@
       });
       row.append(label, remove);
       list.append(row);
+    }
+  }
+
+  const assessmentGroupLabels = {
+    body: "外装・内装系",
+    electrical: "車検証・電装系",
+    basic: "基本情報",
+    custom: "追加項目",
+  };
+
+  function renderAssessmentFields(values = {}) {
+    const container = document.querySelector("#assessment-fields");
+    container.replaceChildren();
+    const groups = ["body", "electrical", "basic", "custom"];
+    for (const groupKey of groups) {
+      const groupFields = assessmentFields.filter((field) => field.group_key === groupKey);
+      if (!groupFields.length) continue;
+      const section = document.createElement("section");
+      section.className = "assessment-group";
+      const heading = document.createElement("h4");
+      heading.textContent = assessmentGroupLabels[groupKey];
+      const grid = document.createElement("div");
+      grid.className = "assessment-field-grid";
+      for (const field of groupFields) {
+        const row = document.createElement("div");
+        row.className = "assessment-field";
+        const label = document.createElement("span");
+        label.textContent = field.name;
+        const control = document.createElement("div");
+        control.className = "assessment-field-control";
+        const value = values[field.id] ?? "";
+        if (field.field_type === "rating") {
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.dataset.assessmentFieldId = field.id;
+          control.append(input);
+          const ratings = document.createElement("div");
+          ratings.className = "rating-control";
+          ratings.setAttribute("role", "group");
+          ratings.setAttribute("aria-label", `${field.name}の評価`);
+          for (let score = 1; score <= 5; score += 1) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = String(score);
+            button.setAttribute("aria-label", `${score}点`);
+            button.setAttribute("aria-pressed", String(String(value) === String(score)));
+            button.classList.toggle("active", String(value) === String(score));
+            button.addEventListener("click", () => {
+              input.value = String(score);
+              ratings.querySelectorAll("button").forEach((item) => {
+                const active = item === button;
+                item.classList.toggle("active", active);
+                item.setAttribute("aria-pressed", String(active));
+              });
+            });
+            ratings.append(button);
+          }
+          control.append(ratings);
+        } else if (field.field_type === "checkbox") {
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.dataset.assessmentFieldId = field.id;
+          input.checked = value === true || value === "true" || value === "1";
+          input.setAttribute("aria-label", `${field.name}${field.suffix ? ` ${field.suffix}` : ""}`);
+          control.append(input);
+          if (field.suffix) {
+            const suffix = document.createElement("span");
+            suffix.className = "assessment-field-suffix";
+            suffix.textContent = field.suffix;
+            control.insertBefore(suffix, input);
+          }
+        } else {
+          const input = document.createElement("input");
+          input.type = field.field_type === "number" ? "number" : "text";
+          input.dataset.assessmentFieldId = field.id;
+          input.value = value;
+          input.maxLength = field.field_type === "text" ? 500 : 12;
+          input.setAttribute("aria-label", field.name);
+          if (field.field_type === "number") {
+            input.min = "0";
+            input.step = "1";
+            input.inputMode = "numeric";
+            if (field.built_in_key === "registration_month") {
+              input.min = "1";
+              input.max = "12";
+              input.placeholder = "1〜12";
+            } else if (field.built_in_key === "registration_year") {
+              input.min = "1900";
+              input.max = String(new Date().getFullYear());
+            }
+          }
+          control.append(input);
+          if (field.suffix) {
+            const suffix = document.createElement("span");
+            suffix.className = "assessment-field-suffix";
+            suffix.textContent = field.suffix;
+            control.append(suffix);
+          }
+        }
+        row.append(label, control);
+        grid.append(row);
+      }
+      section.append(heading, grid);
+      container.append(section);
+    }
+    if (!assessmentFields.length) {
+      const empty = document.createElement("p");
+      empty.className = "assessment-empty";
+      empty.textContent = "評価項目はありません。「評価項目・損傷種類を管理」から追加できます。";
+      container.append(empty);
+    }
+  }
+
+  function collectAssessmentValues() {
+    const values = {};
+    for (const input of document.querySelectorAll("[data-assessment-field-id]")) {
+      const field = assessmentFields.find((entry) => entry.id === Number(input.dataset.assessmentFieldId));
+      if (!field) continue;
+      if (field.field_type === "checkbox") {
+        values[field.id] = input.checked;
+      } else if (input.value !== "") {
+        values[field.id] = input.value;
+      }
+    }
+    return values;
+  }
+
+  function renderInspectionDiagram() {
+    const palette = document.querySelector("#damage-type-palette");
+    const markers = document.querySelector("#inspection-markers");
+    const markList = document.querySelector("#inspection-mark-list");
+    const hint = document.querySelector("#inspection-hint");
+    palette.replaceChildren();
+    markers.replaceChildren();
+    markList.replaceChildren();
+    for (const type of damageTypes) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `damage-type-button${selectedDamageTypeId === type.id ? " active" : ""}`;
+      button.textContent = `${type.icon} ${type.name}`;
+      button.dataset.damageTypeId = type.id;
+      button.addEventListener("pointerdown", startInspectionIssueDrag);
+      button.addEventListener("click", () => {
+        if (suppressDamageClick) {
+          suppressDamageClick = false;
+          return;
+        }
+        selectedDamageTypeId = type.id;
+        renderInspectionDiagram();
+        hint.textContent = `${type.icon} ${type.name}を車体図の位置でタップして記録します。`;
+      });
+      palette.append(button);
+    }
+    if (!damageTypes.length) {
+      const empty = document.createElement("span");
+      empty.className = "assessment-empty";
+      empty.textContent = "問題種類はありません。「評価項目・損傷種類を管理」から追加できます。";
+      palette.append(empty);
+    }
+    inspectionMarks.forEach((mark, index) => {
+      const type = damageTypes.find((entry) => entry.id === mark.damage_type_id);
+      if (!type) return;
+      const marker = document.createElement("button");
+      marker.type = "button";
+      marker.className = "inspection-marker";
+      marker.style.left = `${mark.x * 100}%`;
+      marker.style.top = `${mark.y * 100}%`;
+      marker.style.backgroundColor = type.color;
+      marker.textContent = type.icon;
+      marker.title = `${type.name}（クリックして削除）`;
+      marker.setAttribute("aria-label", `${type.name}の記録を削除`);
+      marker.addEventListener("click", (event) => {
+        event.stopPropagation();
+        inspectionMarks.splice(index, 1);
+        renderInspectionDiagram();
+      });
+      markers.append(marker);
+      const entry = document.createElement("span");
+      entry.className = "inspection-mark-entry";
+      entry.textContent = `${type.icon} ${type.name} · ${Math.round(mark.x * 100)}%, ${Math.round(mark.y * 100)}%`;
+      markList.append(entry);
+    });
+    hint.textContent = selectedDamageTypeId
+      ? `${damageTypes.find((type) => type.id === selectedDamageTypeId)?.name || ""}：車体図をタップして記録`
+      : damageTypes.length
+        ? "問題の種類をドラッグするか、選択して車体図をタップしてください。"
+        : "先に問題種類を追加してください。";
+  }
+
+  function addInspectionMark(typeId, clientX, clientY) {
+    const view = document.querySelector("#inspection-car-view");
+    const rect = view.getBoundingClientRect();
+    const type = damageTypes.find((entry) => entry.id === typeId);
+    if (!type || clientX < rect.left || clientX > rect.right ||
+        clientY < rect.top || clientY > rect.bottom) return false;
+    const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const y = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+    const body = [
+      [103 / 600, 215 / 340], [145 / 600, 171 / 340], [184 / 600, 157 / 340],
+      [236 / 600, 97 / 340], [283 / 600, 76 / 340], [357 / 600, 78 / 340],
+      [412 / 600, 140 / 340], [489 / 600, 164 / 340], [516 / 600, 201 / 340],
+      [511 / 600, 239 / 340], [468 / 600, 259 / 340], [150 / 600, 261 / 340],
+      [109 / 600, 244 / 340],
+    ];
+    let inside = false;
+    for (let current = 0, previous = body.length - 1; current < body.length; previous = current++) {
+      const [currentX, currentY] = body[current];
+      const [previousX, previousY] = body[previous];
+      if ((currentY > y) !== (previousY > y) &&
+          x < (previousX - currentX) * (y - currentY) / (previousY - currentY) + currentX) {
+        inside = !inside;
+      }
+    }
+    const inWheel = [[182 / 600, 246 / 340, 30 / 600], [436 / 600, 244 / 340, 32 / 600]]
+      .some(([centerX, centerY, radius]) => Math.hypot(x - centerX, y - centerY) <= radius);
+    if (!inside && !inWheel) {
+      document.querySelector("#inspection-hint").textContent = "マークは車両イラスト上に置いてください。";
+      return false;
+    }
+    inspectionMarks.push({
+      id: crypto.randomUUID(),
+      damage_type_id: type.id,
+      x,
+      y,
+    });
+    selectedDamageTypeId = null;
+    renderInspectionDiagram();
+    return true;
+  }
+
+  function startInspectionIssueDrag(event) {
+    if ((event.button !== 0 && event.pointerType === "mouse") || inspectionIssueDrag) return;
+    event.preventDefault();
+    const button = event.currentTarget;
+    const type = damageTypes.find((entry) => entry.id === Number(button.dataset.damageTypeId));
+    if (!type) return;
+    inspectionIssueDrag = {
+      type,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+      button,
+    };
+    button.setPointerCapture(event.pointerId);
+  }
+
+  function moveInspectionIssueDrag(event) {
+    if (!inspectionIssueDrag || event.pointerId !== inspectionIssueDrag.pointerId) return;
+    const drag = inspectionIssueDrag;
+    if (Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY) > 7) {
+      drag.moved = true;
+    }
+    if (!drag.moved) return;
+    if (!drag.ghost) {
+      drag.ghost = document.createElement("div");
+      drag.ghost.className = "inspection-drag-ghost";
+      drag.ghost.style.backgroundColor = drag.type.color;
+      drag.ghost.textContent = `${drag.type.icon} ${drag.type.name}`;
+      document.body.append(drag.ghost);
+      drag.button.classList.add("dragging");
+    }
+    drag.ghost.style.left = `${event.clientX}px`;
+    drag.ghost.style.top = `${event.clientY}px`;
+  }
+
+  function endInspectionIssueDrag(event) {
+    if (!inspectionIssueDrag || event.pointerId !== inspectionIssueDrag.pointerId) return;
+    const drag = inspectionIssueDrag;
+    inspectionIssueDrag = null;
+    drag.ghost?.remove();
+    drag.button.classList.remove("dragging");
+    if (drag.moved) {
+      suppressDamageClick = true;
+      addInspectionMark(drag.type.id, event.clientX, event.clientY);
+      window.setTimeout(() => { suppressDamageClick = false; }, 0);
+    }
+  }
+
+  function renderAssessmentManager() {
+    const fields = document.querySelector("#assessment-field-manager-list");
+    const types = document.querySelector("#damage-type-manager-list");
+    fields.replaceChildren();
+    types.replaceChildren();
+    for (const field of assessmentFields) {
+      const row = document.createElement("div");
+      row.className = "assessment-manager-row";
+      const label = document.createElement("span");
+      label.textContent = `${field.name} · ${
+        { rating: "1〜5 評価", checkbox: "チェック", text: "テキスト", number: "数値" }[field.field_type]
+      }${field.suffix ? `（${field.suffix}）` : ""}`;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger-button";
+      remove.textContent = "削除";
+      remove.addEventListener("click", () => removeAssessmentItem(
+        `/api/assessment-fields/${field.id}`, remove, `${field.name}を削除しますか？保存済み評価からも削除されます。`,
+      ));
+      row.append(label, remove);
+      fields.append(row);
+    }
+    for (const type of damageTypes) {
+      const row = document.createElement("div");
+      row.className = "assessment-manager-row";
+      const label = document.createElement("span");
+      label.textContent = `${type.icon} ${type.name}`;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger-button";
+      remove.textContent = "削除";
+      remove.addEventListener("click", () => removeAssessmentItem(
+        `/api/damage-types/${type.id}`, remove, `${type.name}を削除しますか？記録済みの車体マークも削除されます。`,
+      ));
+      row.append(label, remove);
+      types.append(row);
+    }
+  }
+
+  async function removeAssessmentItem(path, button, confirmationMessage) {
+    assessmentManagerError.textContent = "";
+    if (!window.confirm(confirmationMessage)) return;
+    button.disabled = true;
+    try {
+      await api(path, { method: "DELETE" });
+      await loadBoard();
+      renderAssessmentManager();
+      renderInspectionDiagram();
+    } catch (error) {
+      assessmentManagerError.textContent = error.message;
+      button.disabled = false;
     }
   }
 
@@ -1000,6 +1347,7 @@
     vehicleForm.reset();
     formError.textContent = "";
     document.querySelector("#dialog-title").textContent = vehicle ? "車両情報を編集" : "車両を追加";
+    document.querySelector("#manage-assessment-button").hidden = !canManage;
     document.querySelector("#delete-vehicle").hidden = !vehicle || !canManage;
     const defaultLot = lots.find((lot) => lot.name === "予備") || lots[0];
     document.querySelector(".default-location-note").textContent =
@@ -1011,7 +1359,18 @@
       input.checked = Boolean(vehicle?.options?.includes(input.value));
     }
     renderVehicleStatusOptions(vehicle);
+    inspectionMarks = vehicle?.inspection_marks?.map((mark) => ({ ...mark })) || [];
+    selectedDamageTypeId = null;
+    renderAssessmentFields(vehicle?.assessment_values || {});
+    renderInspectionDiagram();
     dialog.showModal();
+  }
+
+  function openAssessmentManager() {
+    if (!canManage) return;
+    assessmentManagerError.textContent = "";
+    renderAssessmentManager();
+    assessmentManagerDialog.showModal();
   }
 
   function openStatusManager() {
@@ -1080,9 +1439,11 @@
   document.querySelector("#manage-locations-button").addEventListener("click", openLocationManager);
   document.querySelector("#manage-franchises-button").addEventListener("click", openFranchiseManager);
   document.querySelector("#manage-statuses-button").addEventListener("click", openStatusManager);
+  document.querySelector("#manage-assessment-button").addEventListener("click", openAssessmentManager);
   document.querySelector("#close-location-dialog").addEventListener("click", () => locationDialog.close());
   document.querySelector("#close-franchise-dialog").addEventListener("click", () => franchiseDialog.close());
   document.querySelector("#close-status-dialog").addEventListener("click", () => statusDialog.close());
+  document.querySelector("#close-assessment-manager").addEventListener("click", () => assessmentManagerDialog.close());
   document.querySelector("#add-status-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     statusError.textContent = "";
@@ -1099,6 +1460,56 @@
       renderStatusManager();
     } catch (error) {
       statusError.textContent = error.message;
+    }
+  });
+  document.querySelector("#add-assessment-field-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    assessmentManagerError.textContent = "";
+    const form = event.currentTarget;
+    if (!form.reportValidity()) return;
+    const data = new FormData(form);
+    try {
+      await api("/api/assessment-fields", {
+        method: "POST",
+        body: JSON.stringify({
+          name: data.get("name"),
+          field_type: data.get("field_type"),
+          suffix: data.get("suffix"),
+        }),
+      });
+      form.reset();
+      const currentValues = collectAssessmentValues();
+      await loadBoard();
+      renderAssessmentFields(currentValues);
+      renderAssessmentManager();
+      renderInspectionDiagram();
+    } catch (error) {
+      assessmentManagerError.textContent = error.message;
+    }
+  });
+  document.querySelector("#add-damage-type-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    assessmentManagerError.textContent = "";
+    const form = event.currentTarget;
+    if (!form.reportValidity()) return;
+    const data = new FormData(form);
+    try {
+      await api("/api/damage-types", {
+        method: "POST",
+        body: JSON.stringify({
+          name: data.get("name"),
+          icon: data.get("icon"),
+          color: data.get("color"),
+        }),
+      });
+      form.reset();
+      const currentValues = collectAssessmentValues();
+      await loadBoard();
+      renderAssessmentFields(currentValues);
+      renderAssessmentManager();
+      renderInspectionDiagram();
+    } catch (error) {
+      assessmentManagerError.textContent = error.message;
     }
   });
   document.querySelector("#add-franchise-form").addEventListener("submit", async (event) => {
@@ -1143,6 +1554,16 @@
   });
   document.querySelector("#close-dialog").addEventListener("click", () => dialog.close());
   document.querySelector("#cancel-dialog").addEventListener("click", () => dialog.close());
+  document.querySelector("#inspection-car-view").addEventListener("click", (event) => {
+    if (suppressDamageClick) return;
+    if (!selectedDamageTypeId) {
+      document.querySelector("#inspection-hint").textContent = "先に問題の種類を選ぶか、車体図へドラッグしてください。";
+      return;
+    }
+    if (addInspectionMark(selectedDamageTypeId, event.clientX, event.clientY)) {
+      document.querySelector("#inspection-hint").textContent = "損傷位置を記録しました。マーカーをクリックすると削除できます。";
+    }
+  });
   document.querySelector("#delete-vehicle").addEventListener("click", async () => {
     if (!canManage) return;
     const id = vehicleForm.elements.id.value;
@@ -1166,6 +1587,8 @@
       options: form.getAll("options"),
     };
     payload.status_ids = form.getAll("status_ids").map(Number);
+    payload.assessment_values = collectAssessmentValues();
+    payload.inspection_marks = inspectionMarks;
     try {
       await api(id ? `/api/vehicles/${id}` : "/api/vehicles", {
         method: id ? "PATCH" : "POST",

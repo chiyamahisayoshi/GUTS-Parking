@@ -10,11 +10,13 @@ const { rateLimit } = require("express-rate-limit");
 const { WebSocket, WebSocketServer } = require("ws");
 
 const {
+  ASSESSMENT_FIELD_TYPES,
   DEFAULT_STATUSES,
   LOT_NAMES,
   VEHICLE_OPTIONS,
   VEHICLE_TYPES,
   openDatabase,
+  seedTenantAssessment,
   seedTenantStatuses,
 } = require("./db");
 const { SQLiteSessionStore } = require("./session-store");
@@ -169,7 +171,17 @@ function getVehicleStatusIds(db, vehicleId) {
 }
 
 function vehicleResponse(db, row) {
-  return vehicleFromRow(row, getVehicleStatusIds(db, row.id));
+  const vehicle = vehicleFromRow(row, getVehicleStatusIds(db, row.id));
+  vehicle.assessment_values = Object.fromEntries(db.prepare(
+    "SELECT field_id, value FROM vehicle_assessment_values WHERE vehicle_id = ? ORDER BY field_id",
+  ).all(row.id).map((entry) => [entry.field_id, entry.value]));
+  vehicle.inspection_marks = db.prepare(`
+    SELECT m.id, m.damage_type_id, m.x, m.y, t.name, t.icon, t.color
+    FROM vehicle_damage_marks m
+    JOIN vehicle_damage_types t ON t.id = m.damage_type_id
+    WHERE m.vehicle_id = ? ORDER BY m.rowid
+  `).all(row.id);
+  return vehicle;
 }
 
 function statusIdsAreValid(db, statusIds, tenantId) {
@@ -180,6 +192,74 @@ function statusIdsAreValid(db, statusIds, tenantId) {
   return db.prepare(
     `SELECT COUNT(*) AS count FROM vehicle_statuses WHERE tenant_id = ? AND id IN (${placeholders})`,
   ).get(tenantId, ...statusIds).count === statusIds.length;
+}
+
+function assessmentValuesAreValid(db, values, tenantId) {
+  if (!values || typeof values !== "object" || Array.isArray(values) ||
+      Object.keys(values).length > 100) return false;
+  for (const [rawId, value] of Object.entries(values)) {
+    const fieldId = parseVehicleId(rawId);
+    if (fieldId === null) return false;
+    const field = db.prepare(
+      "SELECT field_type, built_in_key FROM vehicle_assessment_fields WHERE id = ? AND tenant_id = ?",
+    ).get(fieldId, tenantId);
+    if (!field) return false;
+    if (field.field_type === "rating") {
+      if (!["1", "2", "3", "4", "5"].includes(String(value))) return false;
+    } else if (field.field_type === "checkbox") {
+      if (typeof value !== "boolean" && value !== "true" && value !== "false") return false;
+    } else if (field.field_type === "number") {
+      if (value !== "" && (typeof value !== "number" && typeof value !== "string" ||
+          !/^\d{1,12}$/.test(String(value)))) return false;
+      if (value !== "" && field.built_in_key === "registration_month" &&
+          (Number(value) < 1 || Number(value) > 12)) return false;
+      if (value !== "" && field.built_in_key === "registration_year" &&
+          (Number(value) < 1900 || Number(value) > new Date().getFullYear())) return false;
+    } else if (typeof value !== "string" || value.length > 500) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function inspectionMarksAreValid(db, marks, tenantId) {
+  if (!Array.isArray(marks) || marks.length > 200) return false;
+  const ids = new Set();
+  return marks.every((mark) => {
+    if (!mark || typeof mark !== "object" || Array.isArray(mark) ||
+        typeof mark.id !== "string" || !/^[\w-]{1,64}$/.test(mark.id) || ids.has(mark.id) ||
+        !Number.isSafeInteger(mark.damage_type_id) ||
+        ![mark.x, mark.y].every((coordinate) =>
+          typeof coordinate === "number" && Number.isFinite(coordinate) &&
+          coordinate >= 0 && coordinate <= 1) ||
+        !db.prepare("SELECT 1 FROM vehicle_damage_types WHERE id = ? AND tenant_id = ?")
+          .get(mark.damage_type_id, tenantId)) return false;
+    ids.add(mark.id);
+    return true;
+  });
+}
+
+function saveInspectionData(db, vehicleId, values, marks) {
+  if (values !== undefined) {
+    db.prepare("DELETE FROM vehicle_assessment_values WHERE vehicle_id = ?").run(vehicleId);
+    const saveValue = db.prepare(
+      "INSERT INTO vehicle_assessment_values (vehicle_id, field_id, value) VALUES (?, ?, ?)",
+    );
+    for (const [fieldId, rawValue] of Object.entries(values)) {
+      const value = typeof rawValue === "boolean" ? String(rawValue) : String(rawValue).trim();
+      if (value) saveValue.run(vehicleId, Number(fieldId), value);
+    }
+  }
+  if (marks !== undefined) {
+    db.prepare("DELETE FROM vehicle_damage_marks WHERE vehicle_id = ?").run(vehicleId);
+    const saveMark = db.prepare(`
+      INSERT INTO vehicle_damage_marks (id, vehicle_id, damage_type_id, x, y)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    for (const mark of marks) {
+      saveMark.run(mark.id, vehicleId, mark.damage_type_id, mark.x, mark.y);
+    }
+  }
 }
 
 function parseVehicleId(value) {
@@ -410,10 +490,49 @@ function createApplication(options = {}) {
     const statuses = db.prepare(
       "SELECT id, name, icon, key FROM vehicle_statuses WHERE tenant_id = ? ORDER BY id",
     ).all(request.tenantId);
+    const inspectionValues = new Map();
+    for (const entry of db.prepare(`
+      SELECT a.vehicle_id, a.field_id, a.value
+      FROM vehicle_assessment_values a
+      JOIN vehicles v ON v.id = a.vehicle_id
+      WHERE v.tenant_id = ? ORDER BY a.vehicle_id, a.field_id
+    `).all(request.tenantId)) {
+      if (!inspectionValues.has(entry.vehicle_id)) inspectionValues.set(entry.vehicle_id, {});
+      inspectionValues.get(entry.vehicle_id)[entry.field_id] = entry.value;
+    }
+    const inspectionMarks = new Map();
+    for (const mark of db.prepare(`
+      SELECT m.id, m.vehicle_id, m.damage_type_id, m.x, m.y,
+             t.name, t.icon, t.color
+      FROM vehicle_damage_marks m
+      JOIN vehicles v ON v.id = m.vehicle_id
+      JOIN vehicle_damage_types t ON t.id = m.damage_type_id
+      WHERE v.tenant_id = ? ORDER BY m.rowid
+    `).all(request.tenantId)) {
+      if (!inspectionMarks.has(mark.vehicle_id)) inspectionMarks.set(mark.vehicle_id, []);
+      const { vehicle_id: _vehicleId, ...vehicleMark } = mark;
+      inspectionMarks.get(mark.vehicle_id).push(vehicleMark);
+    }
+    for (const vehicle of vehicles) {
+      vehicle.assessment_values = inspectionValues.get(vehicle.id) || {};
+      vehicle.inspection_marks = inspectionMarks.get(vehicle.id) || [];
+    }
+    const assessmentFields = db.prepare(`
+      SELECT id, built_in_key, group_key, name, field_type, suffix, display_order
+      FROM vehicle_assessment_fields WHERE tenant_id = ?
+      ORDER BY CASE group_key WHEN 'body' THEN 0 WHEN 'electrical' THEN 1 WHEN 'basic' THEN 2 ELSE 3 END,
+               display_order, id
+    `).all(request.tenantId);
+    const damageTypes = db.prepare(`
+      SELECT id, built_in_key, name, icon, color
+      FROM vehicle_damage_types WHERE tenant_id = ? ORDER BY id
+    `).all(request.tenantId);
     response.json({
       parking_lots: parkingLots,
       vehicles,
       statuses,
+      assessment_fields: assessmentFields,
+      damage_types: damageTypes,
       vehicle_types: VEHICLE_TYPES,
       vehicle_options: VEHICLE_OPTIONS,
     });
@@ -460,6 +579,7 @@ function createApplication(options = {}) {
         ).run(name);
         tenantId = Number(tenantResult.lastInsertRowid);
         seedTenantStatuses(db, tenantId);
+        seedTenantAssessment(db, tenantId);
         db.prepare(`
           INSERT INTO users (username, password_hash, role, tenant_id)
           VALUES (?, ?, 'admin', ?)
@@ -712,6 +832,92 @@ function createApplication(options = {}) {
     }
   });
 
+  app.post("/api/assessment-fields", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
+    const type = request.body?.field_type;
+    const suffix = typeof request.body?.suffix === "string" ? request.body.suffix.trim() : "";
+    if (!name || name.length > 60 || !ASSESSMENT_FIELD_TYPES.includes(type) || suffix.length > 16) {
+      return response.status(422).json({ detail: "項目名・入力形式・単位を正しく指定してください。" });
+    }
+    try {
+      const result = db.prepare(`
+        INSERT INTO vehicle_assessment_fields
+          (tenant_id, group_key, name, field_type, suffix, display_order)
+        VALUES (?, 'custom', ?, ?, ?, (
+          SELECT COALESCE(MAX(display_order), -1) + 1
+          FROM vehicle_assessment_fields WHERE tenant_id = ? AND group_key = 'custom'
+        ))
+      `).run(request.tenantId, name, type, suffix, request.tenantId);
+      realtime.notify(request.tenantId);
+      response.status(201).json(db.prepare(`
+        SELECT id, built_in_key, group_key, name, field_type, suffix, display_order
+        FROM vehicle_assessment_fields WHERE id = ? AND tenant_id = ?
+      `).get(result.lastInsertRowid, request.tenantId));
+    } catch (error) {
+      if (isUniqueConstraint(error)) {
+        return response.status(409).json({ detail: "同じ名前の評価項目は既に登録されています。" });
+      }
+      next(error);
+    }
+  });
+
+  app.delete("/api/assessment-fields/:id", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const fieldId = parseVehicleId(request.params.id);
+    if (fieldId === null) return response.status(404).json({ detail: "評価項目が見つかりません。" });
+    try {
+      const result = db.prepare(
+        "DELETE FROM vehicle_assessment_fields WHERE id = ? AND tenant_id = ?",
+      ).run(fieldId, request.tenantId);
+      if (!result.changes) return response.status(404).json({ detail: "評価項目が見つかりません。" });
+      realtime.notify(request.tenantId);
+      response.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/damage-types", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
+    const rawIcon = request.body?.icon;
+    const icon = rawIcon === undefined ? "⚠️" : typeof rawIcon === "string" ? rawIcon.trim() : null;
+    const rawColor = request.body?.color;
+    const color = rawColor === undefined ? "#e34b4b" : rawColor;
+    if (!name || name.length > 40 || icon === null || icon.length > 8 ||
+        typeof color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(color)) {
+      return response.status(422).json({ detail: "問題の名前・アイコン・色を正しく指定してください。" });
+    }
+    try {
+      const result = db.prepare(`
+        INSERT INTO vehicle_damage_types (tenant_id, name, icon, color)
+        VALUES (?, ?, ?, ?)
+      `).run(request.tenantId, name, icon || "⚠️", color);
+      realtime.notify(request.tenantId);
+      response.status(201).json(db.prepare(
+        "SELECT id, built_in_key, name, icon, color FROM vehicle_damage_types WHERE id = ? AND tenant_id = ?",
+      ).get(result.lastInsertRowid, request.tenantId));
+    } catch (error) {
+      if (isUniqueConstraint(error)) {
+        return response.status(409).json({ detail: "同じ名前の問題種類は既に登録されています。" });
+      }
+      next(error);
+    }
+  });
+
+  app.delete("/api/damage-types/:id", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const typeId = parseVehicleId(request.params.id);
+    if (typeId === null) return response.status(404).json({ detail: "問題種類が見つかりません。" });
+    try {
+      const result = db.prepare(
+        "DELETE FROM vehicle_damage_types WHERE id = ? AND tenant_id = ?",
+      ).run(typeId, request.tenantId);
+      if (!result.changes) return response.status(404).json({ detail: "問題種類が見つかりません。" });
+      realtime.notify(request.tenantId);
+      response.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/statuses", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
     const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
     const rawIcon = request.body?.icon;
@@ -801,6 +1007,12 @@ function createApplication(options = {}) {
       if (STATUSES.some((status) => Object.hasOwn(body, status) && typeof body[status] !== "boolean")) {
         return response.status(422).json({ detail: "Vehicle statuses must be boolean." });
       }
+      const assessmentValues = body.assessment_values ?? {};
+      const inspectionMarks = body.inspection_marks ?? [];
+      if (!assessmentValuesAreValid(db, assessmentValues, request.tenantId) ||
+          !inspectionMarksAreValid(db, inspectionMarks, request.tenantId)) {
+        return response.status(422).json({ detail: "車両評価または車体マークの内容が正しくありません。" });
+      }
       const legacyStatuses = db.prepare(
         `SELECT id, key FROM vehicle_statuses WHERE tenant_id = ? AND key IN (${STATUSES.map(() => "?").join(", ")})`,
       ).all(request.tenantId, ...STATUSES);
@@ -833,6 +1045,7 @@ function createApplication(options = {}) {
           "INSERT INTO vehicle_status_assignments (vehicle_id, status_id) VALUES (?, ?)",
         );
         for (const statusId of statusIds) addAssignment.run(result.lastInsertRowid, statusId);
+        saveInspectionData(db, result.lastInsertRowid, assessmentValues, inspectionMarks);
         db.exec("COMMIT");
       } catch (error) {
         db.exec("ROLLBACK");
@@ -859,7 +1072,7 @@ function createApplication(options = {}) {
       if (!existingVehicle) return response.status(404).json({ detail: "Vehicle not found." });
       const allowed = new Set([
         "plate", "vehicle_type", "parking_lot_id", "position_x", "position_y",
-        "options", "status_ids", ...STATUSES,
+        "options", "status_ids", "assessment_values", "inspection_marks", ...STATUSES,
       ]);
       const entries = Object.entries(request.body || {});
       if (!entries.length) return response.status(422).json({ detail: "No vehicle fields supplied." });
@@ -867,6 +1080,18 @@ function createApplication(options = {}) {
         return response.status(422).json({ detail: "Unknown vehicle field." });
       }
       const data = Object.fromEntries(entries);
+      const assessmentValues = Object.hasOwn(data, "assessment_values") ? data.assessment_values : undefined;
+      const inspectionMarks = Object.hasOwn(data, "inspection_marks") ? data.inspection_marks : undefined;
+      if (assessmentValues !== undefined &&
+          !assessmentValuesAreValid(db, assessmentValues, request.tenantId)) {
+        return response.status(422).json({ detail: "車両評価の内容が正しくありません。" });
+      }
+      if (inspectionMarks !== undefined &&
+          !inspectionMarksAreValid(db, inspectionMarks, request.tenantId)) {
+        return response.status(422).json({ detail: "車体マークの内容が正しくありません。" });
+      }
+      delete data.assessment_values;
+      delete data.inspection_marks;
       const hasStatusIds = Object.hasOwn(data, "status_ids");
       let nextStatusIds = null;
       if (hasStatusIds) {
@@ -956,6 +1181,7 @@ function createApplication(options = {}) {
           );
           for (const statusId of nextStatusIds) addAssignment.run(vehicleId, statusId);
         }
+        saveInspectionData(db, vehicleId, assessmentValues, inspectionMarks);
         db.exec("COMMIT");
       } catch (error) {
         db.exec("ROLLBACK");
