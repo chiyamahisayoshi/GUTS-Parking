@@ -321,6 +321,38 @@ function isUniqueConstraint(error) {
   return error.code === "SQLITE_CONSTRAINT_UNIQUE" || error.errcode === 2067;
 }
 
+// Accepts "2026/10/13 10:30", "2026-10-13T10:30" and full-width colons; returns "YYYY-MM-DD HH:MM".
+function normalizeJobTime(value) {
+  if (typeof value !== "string") return null;
+  const match = value.trim().replace(/：/g, ":").replace(/[０-９]/g, (digit) =>
+    String.fromCharCode(digit.charCodeAt(0) - 0xfee0))
+    .match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})[T\s]+(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const [year, month, day, hour, minute] = match.slice(1).map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 ||
+      date.getUTCDate() !== day || hour > 23 || minute > 59) return null;
+  const pad = (number, size = 2) => String(number).padStart(size, "0");
+  return `${pad(year, 4)}-${pad(month)}-${pad(day)} ${pad(hour)}:${pad(minute)}`;
+}
+
+function localDay(date, timeZone) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(date);
+}
+
+// Removes completed jobs finished before the current local day (i.e. cleared at midnight).
+function purgeCompletedJobs(db, now = new Date(), timeZone = process.env.JOBS_TIMEZONE || "Asia/Tokyo") {
+  const today = localDay(now, timeZone);
+  const stale = db.prepare("SELECT id, completed_at FROM jobs WHERE completed = 1").all()
+    .filter((job) => !job.completed_at || localDay(new Date(job.completed_at), timeZone) < today)
+    .map((job) => job.id);
+  const remove = db.prepare("DELETE FROM jobs WHERE id = ?");
+  for (const id of stale) remove.run(id);
+  return stale.length;
+}
+
 function getNextPosition(db, lotId) {
   if (lotId === null || lotId === undefined) return { positionX: 0.5, positionY: 0.5 };
   const counts = new Map();
@@ -646,9 +678,15 @@ function createApplication(options = {}) {
     const vehicleOptions = db.prepare(
       "SELECT id, name FROM vehicle_option_types WHERE tenant_id = ? ORDER BY id",
     ).all(request.tenantId);
+    const jobs = db.prepare(`
+      SELECT id, vehicle_id, destination_lot_id, scheduled_at, completed
+      FROM jobs WHERE tenant_id = ?
+      ORDER BY completed, scheduled_at, id
+    `).all(request.tenantId);
     response.json({
       parking_lots: parkingLots,
       vehicles,
+      jobs,
       statuses,
       assessment_fields: assessmentFields,
       damage_types: damageTypes,
@@ -1107,6 +1145,65 @@ function createApplication(options = {}) {
     }
   });
 
+  app.post("/api/jobs", requireUser, requireSameOrigin, (request, response, next) => {
+    const body = request.body || {};
+    const scheduledAt = normalizeJobTime(body.scheduled_at);
+    const vehicleId = parseVehicleId(String(body.vehicle_id ?? ""));
+    const lotId = parseVehicleId(String(body.destination_lot_id ?? ""));
+    if (!scheduledAt || vehicleId === null || lotId === null) {
+      return response.status(422).json({ detail: "日時・車両・送り先を正しく入力してください。" });
+    }
+    try {
+      const vehicle = db.prepare("SELECT id FROM vehicles WHERE id = ? AND tenant_id = ?")
+        .get(vehicleId, request.tenantId);
+      const lot = db.prepare("SELECT id FROM parking_lots WHERE id = ? AND tenant_id = ?")
+        .get(lotId, request.tenantId);
+      if (!vehicle || !lot) {
+        return response.status(422).json({ detail: "車両または送り先が見つかりません。" });
+      }
+      const result = db.prepare(`
+        INSERT INTO jobs (tenant_id, vehicle_id, destination_lot_id, scheduled_at)
+        VALUES (?, ?, ?, ?)
+      `).run(request.tenantId, vehicleId, lotId, scheduledAt);
+      realtime.notify(request.tenantId);
+      response.status(201).json({ id: Number(result.lastInsertRowid) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/jobs/:id", requireUser, requireSameOrigin, (request, response, next) => {
+    const jobId = parseVehicleId(request.params.id);
+    if (jobId === null || typeof request.body?.completed !== "boolean") {
+      return response.status(422).json({ detail: "ジョブの状態が正しくありません。" });
+    }
+    try {
+      const completed = request.body.completed;
+      const result = db.prepare(
+        "UPDATE jobs SET completed = ?, completed_at = ? WHERE id = ? AND tenant_id = ?",
+      ).run(completed ? 1 : 0, completed ? new Date().toISOString() : null, jobId, request.tenantId);
+      if (!result.changes) return response.status(404).json({ detail: "ジョブが見つかりません。" });
+      realtime.notify(request.tenantId);
+      response.json({ id: jobId, completed });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/jobs/:id", requireUser, requireSameOrigin, (request, response, next) => {
+    const jobId = parseVehicleId(request.params.id);
+    if (jobId === null) return response.status(404).json({ detail: "ジョブが見つかりません。" });
+    try {
+      const result = db.prepare("DELETE FROM jobs WHERE id = ? AND tenant_id = ?")
+        .run(jobId, request.tenantId);
+      if (!result.changes) return response.status(404).json({ detail: "ジョブが見つかりません。" });
+      realtime.notify(request.tenantId);
+      response.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/statuses", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
     const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
     const rawIcon = request.body?.icon;
@@ -1484,13 +1581,26 @@ function createApplication(options = {}) {
     response.status(500).json({ detail: "Internal server error." });
   });
 
+  function purgeJobs(now = new Date()) {
+    try {
+      const removed = purgeCompletedJobs(db, now);
+      if (removed) {
+        for (const tenant of db.prepare("SELECT id FROM tenants").all()) realtime.notify(tenant.id);
+      }
+      return removed;
+    } catch (error) {
+      errorLogger.capture("job-purge-error", error);
+      return 0;
+    }
+  }
+
   function createServer() {
     const server = http.createServer(app);
     realtime.attach(server);
     return server;
   }
 
-  return { app, db, sessionStore, errorLogger, createServer };
+  return { app, db, sessionStore, errorLogger, createServer, purgeJobs };
 }
 
 async function start() {
@@ -1504,6 +1614,8 @@ async function start() {
     process.exit(1);
   });
   const server = application.createServer();
+  application.purgeJobs();
+  setInterval(() => application.purgeJobs(), 60_000).unref();
   const port = Number(process.env.PORT || 8000);
   const host = process.env.HOST || "127.0.0.1";
   server.listen(port, host, () => console.log(`Guts board listening on http://${host}:${port}`));

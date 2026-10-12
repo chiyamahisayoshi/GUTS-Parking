@@ -394,6 +394,16 @@ function openDatabase(databasePath) {
       PRIMARY KEY (tenant_id, built_in_key)
     );
     CREATE INDEX IF NOT EXISTS vehicle_option_types_tenant_idx ON vehicle_option_types(tenant_id, id);
+    CREATE TABLE IF NOT EXISTS jobs (
+      id INTEGER PRIMARY KEY,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+      destination_lot_id INTEGER NOT NULL REFERENCES parking_lots(id) ON DELETE CASCADE,
+      scheduled_at TEXT NOT NULL,
+      completed INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0, 1)),
+      completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS jobs_tenant_idx ON jobs(tenant_id, completed, scheduled_at);
   `);
   const optionColumns = new Set(
     db.prepare("PRAGMA table_info(vehicle_option_types)").all().map((column) => column.name),

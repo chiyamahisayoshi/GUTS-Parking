@@ -20,6 +20,8 @@
   let vehicleTypes = [];
   let vehicleOptions = [];
   let statuses = [];
+  let jobs = [];
+  let jobVehicleId = null;
   let assessmentFields = [];
   let damageTypes = [];
   let inspectionMarks = [];
@@ -147,6 +149,7 @@
     vehicleTypes = data.vehicle_types;
     vehicleOptions = data.vehicle_options || [];
     statuses = data.statuses || [];
+    jobs = data.jobs || [];
     assessmentFields = data.assessment_fields || [];
     damageTypes = data.damage_types || [];
     const availableDamageTypeIds = new Set(damageTypes.map((type) => type.id));
@@ -179,6 +182,7 @@
     renderVehicleCatalog(vehicles);
     renderStatusFilters();
     renderStatusList(vehicles);
+    renderJobs();
     if (!dialog.open) renderInspectionDiagram();
   }
 
@@ -962,6 +966,189 @@
       list.append(row);
     }
   }
+
+  function jobVehicleInfo(vehicleId) {
+    const vehicle = vehicles.find((entry) => entry.id === vehicleId);
+    if (!vehicle) return null;
+    const lot = lots.find((entry) => entry.id === vehicle.parking_lot_id);
+    return { vehicle, className: vehicle.vehicle_type, location: lot ? lot.name : "未配置" };
+  }
+
+  function formatJobTime(value) {
+    return String(value).replace(/-/g, "/");
+  }
+
+  function makeJobRow(job, manager) {
+    const info = jobVehicleInfo(job.vehicle_id);
+    const destination = lots.find((lot) => lot.id === job.destination_lot_id);
+    const row = document.createElement("div");
+    row.className = `job-row${job.completed ? " completed" : ""}`;
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = Boolean(job.completed);
+    check.setAttribute("aria-label", "完了");
+    check.addEventListener("change", async () => {
+      check.disabled = true;
+      try {
+        await api(`/api/jobs/${job.id}`, { method: "PATCH", body: JSON.stringify({ completed: check.checked }) });
+        await loadBoard();
+        if (document.querySelector("#job-dialog").open) renderJobManager();
+      } catch (error) {
+        showError(error);
+        check.checked = !check.checked;
+        check.disabled = false;
+      }
+    });
+    const text = document.createElement("span");
+    text.className = "job-text";
+    const parts = [formatJobTime(job.scheduled_at), info ? info.vehicle.plate : "—",
+      info ? info.className : "—", info ? info.location : "—", "を→", destination ? destination.name : "—"];
+    parts.forEach((part, index) => {
+      const cell = document.createElement("span");
+      cell.className = `job-cell job-cell-${index}`;
+      cell.textContent = part;
+      text.append(cell);
+    });
+    row.append(check, text);
+    if (manager) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger-button";
+      remove.textContent = "削除";
+      remove.addEventListener("click", async () => {
+        if (!window.confirm("このジョブを削除しますか？")) return;
+        remove.disabled = true;
+        try {
+          await api(`/api/jobs/${job.id}`, { method: "DELETE" });
+          await loadBoard();
+          renderJobManager();
+        } catch (error) {
+          document.querySelector("#job-error").textContent = error.message;
+          remove.disabled = false;
+        }
+      });
+      row.append(remove);
+    }
+    return row;
+  }
+
+  function renderJobs() {
+    const list = document.querySelector("#job-list");
+    list.replaceChildren();
+    const open = jobs.filter((job) => !job.completed).length;
+    document.querySelector("#job-total").textContent = `未完了 ${open} / 全${jobs.length}件`;
+    if (!jobs.length) {
+      const empty = document.createElement("p");
+      empty.className = "status-empty";
+      empty.textContent = "ジョブはありません。";
+      list.append(empty);
+    }
+    for (const job of jobs) list.append(makeJobRow(job, false));
+    if (document.querySelector("#job-dialog").open) renderJobManager();
+  }
+
+  function renderJobManager() {
+    const list = document.querySelector("#job-manager-list");
+    list.replaceChildren();
+    if (!jobs.length) {
+      const empty = document.createElement("p");
+      empty.className = "status-empty";
+      empty.textContent = "ジョブはありません。";
+      list.append(empty);
+    }
+    for (const job of jobs) list.append(makeJobRow(job, true));
+    const destination = document.querySelector("#job-destination");
+    const previous = destination.value;
+    destination.replaceChildren(...lots.map((lot) => new Option(lot.name, lot.id)));
+    if (previous && lots.some((lot) => String(lot.id) === previous)) destination.value = previous;
+  }
+
+  function normalizePlateQuery(value) {
+    return String(value).normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+  }
+
+  function selectJobVehicle(vehicleId) {
+    jobVehicleId = vehicleId;
+    const info = vehicleId === null ? null : jobVehicleInfo(vehicleId);
+    document.querySelector("#job-class").textContent = info ? info.className : "—";
+    document.querySelector("#job-location").textContent = info ? info.location : "—";
+    if (info) document.querySelector("#job-plate").value = info.vehicle.plate;
+    document.querySelector("#job-suggestions").hidden = true;
+  }
+
+  function updateJobSuggestions() {
+    const box = document.querySelector("#job-suggestions");
+    const query = normalizePlateQuery(document.querySelector("#job-plate").value);
+    selectJobVehicle(null);
+    document.querySelector("#job-suggestions").hidden = true;
+    box.replaceChildren();
+    if (!query) return;
+    const matches = vehicles.filter((vehicle) => normalizePlateQuery(vehicle.plate).includes(query)).slice(0, 8);
+    if (!matches.length) return;
+    for (const vehicle of matches) {
+      const info = jobVehicleInfo(vehicle.id);
+      const option = document.createElement("button");
+      option.type = "button";
+      option.textContent = `${vehicle.plate}　${info.className}　${info.location}`;
+      option.addEventListener("click", () => selectJobVehicle(vehicle.id));
+      box.append(option);
+    }
+    box.hidden = false;
+  }
+
+  function pad2(number) {
+    return String(number).padStart(2, "0");
+  }
+
+  function currentJobTimeText() {
+    const now = new Date();
+    return `${now.getFullYear()}/${pad2(now.getMonth() + 1)}/${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+  }
+
+  function openJobManager() {
+    document.querySelector("#job-error").textContent = "";
+    document.querySelector("#add-job-form").reset();
+    document.querySelector("#job-time-text").value = currentJobTimeText();
+    selectJobVehicle(null);
+    renderJobManager();
+    document.querySelector("#job-dialog").showModal();
+  }
+
+  document.querySelector("#manage-jobs-button").addEventListener("click", openJobManager);
+  document.querySelector("#close-job-dialog").addEventListener("click", () =>
+    document.querySelector("#job-dialog").close());
+  document.querySelector("#job-plate").addEventListener("input", updateJobSuggestions);
+  document.querySelector("#job-time-picker").addEventListener("change", (event) => {
+    if (event.target.value) {
+      document.querySelector("#job-time-text").value = event.target.value.replace(/-/g, "/").replace("T", " ");
+    }
+  });
+  document.querySelector("#add-job-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const error = document.querySelector("#job-error");
+    error.textContent = "";
+    if (!event.currentTarget.reportValidity()) return;
+    if (jobVehicleId === null) {
+      error.textContent = "候補から車両を選択してください。";
+      return;
+    }
+    try {
+      await api("/api/jobs", {
+        method: "POST",
+        body: JSON.stringify({
+          scheduled_at: document.querySelector("#job-time-text").value,
+          vehicle_id: jobVehicleId,
+          destination_lot_id: Number(document.querySelector("#job-destination").value),
+        }),
+      });
+      document.querySelector("#job-plate").value = "";
+      selectJobVehicle(null);
+      await loadBoard();
+      renderJobManager();
+    } catch (failure) {
+      error.textContent = failure.message;
+    }
+  });
 
   function renderStatusManager() {
     const list = document.querySelector("#status-manager-list");
