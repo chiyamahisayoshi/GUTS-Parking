@@ -38,6 +38,7 @@
         <div class="page-actions">
           <button id="manage-locations-button" class="primary-button">＋ 位置を管理</button>
           <button id="add-vehicle-button" class="primary-button">＋ 車両を追加</button>
+          <button id="manage-franchises-button" class="primary-button" hidden>＋ 加盟店管理</button>
         </div>
       </section>
       <section class="summary-row" aria-label="車両の概要">
@@ -107,6 +108,23 @@
         <button type="submit" class="primary-button">位置を追加</button>
       </form>
       <p id="location-error" class="error-message" role="alert"></p>
+    </div>
+  </dialog>
+  <dialog id="franchise-dialog">
+    <div class="franchise-form">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">FRANCHISE ACCOUNTS</p><h2>加盟店管理</h2></div>
+        <button type="button" id="close-franchise-dialog" class="close-button" aria-label="閉じる">×</button>
+      </div>
+      <p class="muted">加盟店ごとに車両・位置データは分離されます。利用停止中は加盟店の全アカウントがログインできません。</p>
+      <div id="franchise-list" class="franchise-list"></div>
+      <form id="add-franchise-form" class="add-franchise-form">
+        <label>加盟店名<input name="name" required maxlength="80" placeholder="例：〇〇店"></label>
+        <label>管理者ユーザー名<input name="username" required maxlength="80" autocomplete="off"></label>
+        <label>初期パスワード（12文字以上）<input name="password" type="password" required minlength="12" maxlength="1024" autocomplete="new-password"></label>
+        <button type="submit" class="primary-button">加盟店とアカウントを作成</button>
+      </form>
+      <p id="franchise-error" class="error-message" role="alert"></p>
     </div>
   </dialog>
   <script src="/static/app.js" defer></script>
