@@ -1251,11 +1251,14 @@ test("wires catalog search, token blink and labelled job time inputs", () => {
   const script = fs.readFileSync(path.join(__dirname, "../static/app.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "../static/style.css"), "utf8");
   assert.match(html, /id="catalog-search"/);
+  assert.match(html, /id="board-search"/);
   assert.match(html, /貼り付け用可/);
   assert.match(html, /車番で検索/);
   assert.match(script, /token-blink/);
   assert.match(script, /catalog-search/);
+  assert.match(script, /board-search/);
   assert.match(css, /@keyframes token-blink/);
+  assert.match(css, /\.board-search-bar/);
 });
 
 test("manages dispatch jobs: ordering, completion, isolation, validation and midnight purge", async () => {
