@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const { once } = require("node:events");
 const os = require("node:os");
 const path = require("node:path");
+const vm = require("node:vm");
 const { spawnSync } = require("node:child_process");
 const { after, before, test } = require("node:test");
 const { WebSocket } = require("ws");
@@ -64,11 +65,27 @@ test("serves the browser UI but protects vehicle data until login", async () => 
   const appScript = await request(server).get("/static/app.js");
   assert.equal(appScript.status, 200);
   assert.match(appScript.text, /setAppVersion/);
+  assert.equal((await request(server).get("/static/id.js")).status, 200);
+  assert.match(page.text, /\/static\/id\.js/);
   assert.equal((await request(server).get("/static/inspection3d.mjs")).status, 200);
   assert.match((await request(server).get("/vendor/three.module.js")).headers["content-type"], /javascript/);
   assert.deepEqual((await request(server).get("/api/me")).body, { authenticated: false, version: appVersion });
   assert.equal((await request(server).get("/api/bootstrap")).status, 401);
   assert.equal((await agent.get("/api/bootstrap")).status, 401);
+});
+
+test("generates UUIDs without requiring a secure browser context", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "static", "id.js"), "utf8");
+  for (const crypto of [{ getRandomValues: (bytes) => bytes.fill(0x2a) }, undefined]) {
+    const browser = {
+      Uint8Array,
+      Math,
+      ...(crypto ? { crypto } : {}),
+    };
+    vm.runInNewContext(source, browser);
+    const id = browser.createClientId();
+    assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  }
 });
 
 test("records sanitized browser and server request errors without logging request data", async () => {

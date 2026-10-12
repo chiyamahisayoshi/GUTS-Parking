@@ -432,7 +432,7 @@
     }
     const color = document.querySelector(`#marking-color-${lot.id}`).value;
     await updateMarkings(lot, [...markings, {
-      id: crypto.randomUUID(),
+      id: createClientId(),
       color,
       x1: draft.x1,
       y1: draft.y1,

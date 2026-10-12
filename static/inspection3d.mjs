@@ -240,7 +240,7 @@ function addMark(typeId, hit) {
   const surfaceNormal = hit.face.normal.clone().applyMatrix3(normalMatrix).normalize();
   const point = hit.point.clone().addScaledVector(surfaceNormal, 0.035);
   const mark = {
-    id: crypto.randomUUID(),
+    id: globalThis.createClientId(),
     damage_type_id: typeId,
     x: THREE.MathUtils.clamp((hit.point.x + 2.3) / 4.6, 0, 1),
     y: THREE.MathUtils.clamp(1 - hit.point.y / 1.9, 0, 1),
