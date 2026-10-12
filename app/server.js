@@ -1,4 +1,4 @@
-const http = require("node:http");
+﻿const http = require("node:http");
 const path = require("node:path");
 require("dotenv").config({ path: path.resolve(__dirname, "..", ".env") });
 const express = require("express");
@@ -414,6 +414,10 @@ function createApplication(options = {}) {
       },
     },
   }));
+  app.use((request, _response, next) => {
+    if (request.url.startsWith("/api/v1/")) request.url = `/api/${request.url.slice(8)}`;
+    next();
+  });
   app.use(express.json({ limit: "64kb" }));
   app.use(session({
     name: "rentalcar_session",
@@ -1499,14 +1503,30 @@ function createApplication(options = {}) {
     response.status(204).end();
   });
 
-  app.post("/api/integration/vehicles:sync", requireSameOrigin, (request, response, next) => {
+  function requireErpKey(request, response, next) {
     if (!erpApiKey) return response.status(503).json({ detail: "ERP integration is not enabled." });
-    const providedKey = request.get("x-erp-api-key") || "";
     const expected = Buffer.from(erpApiKey);
-    const provided = Buffer.from(providedKey);
+    const provided = Buffer.from(request.get("x-erp-api-key") || "");
     if (expected.length !== provided.length || !require("node:crypto").timingSafeEqual(expected, provided)) {
       return response.status(401).json({ detail: "Invalid ERP API key." });
     }
+    next();
+  }
+
+  app.get("/api/health", (_request, response) => {
+    response.json({ status: "ok", version });
+  });
+
+  app.get("/api/integration/vehicles", requireErpKey, (_request, response) => {
+    const vehicles = db.prepare(`
+      SELECT v.id, v.external_id, v.plate, v.vehicle_type, v.parking_lot_id, l.name AS parking_lot_name
+      FROM vehicles v LEFT JOIN parking_lots l ON l.id = v.parking_lot_id
+      WHERE v.tenant_id = ? ORDER BY v.id
+    `).all(headquartersId);
+    response.json({ vehicles });
+  });
+
+  app.post("/api/integration/vehicles:sync", requireSameOrigin, requireErpKey, (request, response, next) => {
     const payload = request.body;
     if (!Array.isArray(payload)) return response.status(422).json({ detail: "Expected a vehicle array." });
     if (payload.length > 500) return response.status(413).json({ detail: "A sync batch may contain at most 500 vehicles." });

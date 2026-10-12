@@ -1,4 +1,4 @@
-# Guts 車両配置ボード
+﻿# Guts 車両配置ボード
 
 レンタカー会社向けの、ブラウザで使う車両共有ボードです。本店と加盟店ごとに、車両・駐車場・レイアウトが完全に分かれています。店舗アカウントは自店のデータだけを閲覧・操作できます。
 
@@ -165,8 +165,14 @@ npm start
 
 ## ERP 連携 API
 
+詳細は [docs/ERP_INTEGRATION.md](docs/ERP_INTEGRATION.md) を参照してください（/api/v1/... でも呼べます）。
+
 `.env` に `ERP_API_KEY` を設定すると、`POST /api/integration/vehicles:sync` が使えます。`X-ERP-API-Key` ヘッダーにキーを付け、JSON 配列（各要素に `external_id`、`plate`、`vehicle_type`、任意で `parking_lot_id`）を送ります。同じ `external_id` は基本情報だけを更新し、ボード上のステータスと位置は上書きしません。1 回最大 500 台で、キー未設定の場合は 503 を返します。現在は本店のみ対象です。キー変更後は PM2 で再起動してください。
 
 ## 構成と規模
 
 単一プロセス + SQLite の構成は、1 台の VPS と約 250 台の車両に適しています。複数プロセスや複数サーバーに拡張する場合は、共有データベースとメッセージ基盤が必要です。
+
+## ストアアプリ化の準備
+
+PWA（ホーム画面に追加）に対応済みです。App Store / Google Play への公開手順と審査の注意点は [docs/MOBILE_APP.md](docs/MOBILE_APP.md) を参照してください。プライバシーポリシーのひな形は /static/privacy.html です（公開前に運営者情報を記入）。

@@ -1,0 +1,14 @@
+{
+  "name": "Guts 車両配置ボード",
+  "short_name": "Guts",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f2f5f8",
+  "theme_color": "#f2f5f8",
+  "lang": "ja",
+  "icons": [
+    { "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

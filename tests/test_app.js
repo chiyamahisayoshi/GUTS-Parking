@@ -817,9 +817,35 @@ test("syncs ERP records idempotently while preserving board-managed status and p
       appWithErp.db.prepare("SELECT parking_lot_id FROM vehicles WHERE id = ?").get(defaultVehicle.id).parking_lot_id,
       2,
     );
+    assert.equal((await erpAgent.get("/api/v1/integration/vehicles")).status, 401);
+    const exported = (await erpAgent.get("/api/v1/integration/vehicles").set(headers)).body.vehicles;
+    const row = exported.find((item) => item.external_id === "fleet-vehicle-43");
+    assert.equal(row.plate, "品川 500 あ 4444");
+    assert.equal(row.parking_lot_id, 2);
+    assert.ok(row.parking_lot_name);
+    assert.equal(
+      (await erpAgent.post("/api/v1/integration/vehicles:sync").set(headers).send([withoutLocation])).status,
+      200,
+    );
   } finally {
     appWithErp.db.close();
   }
+});
+
+test("exposes health, versioned API alias and PWA assets for mobile packaging", async () => {
+  const health = await agent.get("/api/v1/health");
+  assert.equal(health.status, 200);
+  assert.equal(health.body.status, "ok");
+  assert.equal((await agent.get("/api/health")).body.version, health.body.version);
+  assert.deepEqual((await agent.get("/api/v1/me")).body, (await agent.get("/api/me")).body);
+  const manifest = await agent.get("/static/manifest.webmanifest");
+  assert.equal(manifest.status, 200);
+  assert.equal(JSON.parse(manifest.text).display, "standalone");
+  assert.equal((await agent.get("/sw.js")).status, 200);
+  assert.equal((await agent.get("/static/privacy.html")).status, 200);
+  const html = fs.readFileSync(path.join(__dirname, "../static/index.html"), "utf8");
+  assert.match(html, /rel="manifest"/);
+  assert.match(html, /\/static\/pwa\.js/);
 });
 
 test("password hashes are unique, verifiable, and reject short passwords", async () => {
