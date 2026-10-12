@@ -18,6 +18,7 @@
   let lots = [];
   let vehicles = [];
   let vehicleTypes = [];
+  let vehicleOptions = [];
   let statuses = [];
   let assessmentFields = [];
   let damageTypes = [];
@@ -37,6 +38,8 @@
   let selectedMarking = null;
   let markingError = "";
   const markingColors = new Map();
+  const markingSaveChains = new Map();
+  const markingSaveRevisions = new Map();
   let suppressClick = false;
 
   async function api(path, options = {}) {
@@ -96,6 +99,7 @@
     lots = data.parking_lots;
     vehicles = data.vehicles;
     vehicleTypes = data.vehicle_types;
+    vehicleOptions = data.vehicle_options || [];
     statuses = data.statuses || [];
     assessmentFields = data.assessment_fields || [];
     damageTypes = data.damage_types || [];
@@ -275,6 +279,7 @@
       draw.className = "lot-control";
       draw.textContent = drawingLotId === lot.id ? "描画終了" : "直線を引く";
       draw.addEventListener("click", () => {
+        if (drawingLotId === lot.id) cancelDraftMarking(lot.id);
         drawingLotId = drawingLotId === lot.id ? null : lot.id;
         selectedMarking = null;
         render();
@@ -301,8 +306,8 @@
       undo.type = "button";
       undo.className = "lot-control";
       undo.textContent = "取り消し";
-      undo.title = "最後に描いた線を取り消します";
-      undo.disabled = markings.length === 0;
+      undo.title = "保存済みの最後の線を削除して保存します";
+      undo.disabled = markings.length === 0 || markingSaveChains.has(lot.id);
       undo.addEventListener("click", () => {
         if (!markings.length) return;
         updateMarkings(lot, markings.slice(0, -1));
@@ -311,8 +316,8 @@
       const guidance = document.createElement("span");
       guidance.className = "lot-marking-guidance";
       guidance.textContent = drawingLotId === lot.id
-        ? "位置内をドラッグして直線を引きます。"
-        : "線を選択してから削除できます。";
+        ? "位置内をドラッグして直線を引きます。線は指を離すと自動保存されます。"
+        : "線を描くと自動保存されます。選択削除または取り消しも保存されます。";
       tools.append(guidance);
       if (markingError) {
         const error = document.createElement("span");
@@ -397,24 +402,44 @@
 
   function cancelMarking(event) {
     if (draftMarking?.pointerId === event.pointerId) {
-      draftMarking = null;
-      document.querySelector(".marking-preview")?.removeAttribute("x1");
+      cancelDraftMarking(draftMarking.lotId);
     }
   }
 
+  function cancelDraftMarking(lotId) {
+    if (draftMarking?.lotId !== lotId) return;
+    draftMarking = null;
+    document.querySelector(`.lot-markings[data-lot-id="${lotId}"] .marking-preview`)?.removeAttribute("x1");
+  }
+
   async function updateMarkings(lot, markings) {
+    const previousMarkings = lot.markings;
+    const revision = (markingSaveRevisions.get(lot.id) || 0) + 1;
+    markingSaveRevisions.set(lot.id, revision);
+    lot.markings = markings;
+    selectedMarking = null;
+    markingError = "";
+    render();
+    const previousSave = markingSaveChains.get(lot.id) || Promise.resolve();
+    const save = previousSave.catch(() => {}).then(async () => api(`/api/parking-lots/${lot.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ markings }),
+    }));
+    markingSaveChains.set(lot.id, save);
     try {
-      const updated = await api(`/api/parking-lots/${lot.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ markings }),
-      });
-      Object.assign(lot, updated);
-      selectedMarking = null;
-      markingError = "";
-      render();
+      const updated = await save;
+      if (markingSaveRevisions.get(lot.id) === revision) {
+        Object.assign(lot, updated);
+        markingError = "";
+      }
     } catch (error) {
-      markingError = error.message;
-      render();
+      if (markingSaveRevisions.get(lot.id) === revision) {
+        lot.markings = previousMarkings;
+        markingError = `${error.message} 線はサーバーに保存されていません。`;
+      }
+    } finally {
+      if (markingSaveChains.get(lot.id) === save) markingSaveChains.delete(lot.id);
+      if (markingSaveRevisions.get(lot.id) === revision) render();
     }
   }
 
@@ -810,6 +835,62 @@
     }
   }
 
+  function renderVehicleOptions(vehicle) {
+    const container = document.querySelector("#vehicle-option-choices");
+    container.replaceChildren();
+    for (const option of vehicleOptions) {
+      const label = document.createElement("label");
+      label.className = "check-label";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.name = "options";
+      input.value = option.name;
+      input.checked = vehicle?.options?.includes(option.name) || false;
+      label.append(input, document.createTextNode(option.name));
+      container.append(label);
+    }
+    if (!vehicleOptions.length) {
+      const empty = document.createElement("span");
+      empty.className = "status-empty";
+      empty.textContent = "オプションはありません。";
+      container.append(empty);
+    }
+  }
+
+  function renderOptionManager() {
+    const list = document.querySelector("#option-manager-list");
+    list.replaceChildren();
+    for (const option of vehicleOptions) {
+      const row = document.createElement("div");
+      row.className = "status-manager-row";
+      const label = document.createElement("span");
+      label.textContent = option.name;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger-button";
+      remove.textContent = "削除";
+      remove.addEventListener("click", async () => {
+        const error = document.querySelector("#option-error");
+        error.textContent = "";
+        if (!window.confirm(`オプション「${option.name}」を削除しますか？登録済み車両からも解除されます。`)) return;
+        remove.disabled = true;
+        try {
+          await api(`/api/vehicle-options/${option.id}`, { method: "DELETE" });
+          const selected = new Set([...document.querySelectorAll('input[name="options"]:checked')].map((input) => input.value));
+          selected.delete(option.name);
+          await loadBoard();
+          renderVehicleOptions({ options: [...selected] });
+          renderOptionManager();
+        } catch (failure) {
+          error.textContent = failure.message;
+          remove.disabled = false;
+        }
+      });
+      row.append(label, remove);
+      list.append(row);
+    }
+  }
+
   function renderStatusManager() {
     const list = document.querySelector("#status-manager-list");
     list.replaceChildren();
@@ -833,9 +914,14 @@
         statusError.textContent = "";
         if (!window.confirm(`ステータス「${status.name}」を削除しますか？登録済み車両からも解除されます。`)) return;
         remove.disabled = true;
+        const selectedStatusIds = [...document.querySelectorAll('input[name="status_ids"]:checked')]
+          .map((input) => Number(input.value));
         try {
           await api(`/api/statuses/${status.id}`, { method: "DELETE" });
           await loadBoard();
+          renderVehicleStatusOptions({
+            status_ids: selectedStatusIds.filter((id) => statuses.some((entry) => entry.id === id)),
+          });
           renderStatusManager();
         } catch (error) {
           statusError.textContent = error.message;
@@ -973,12 +1059,13 @@
 
   function renderInspectionDiagram() {
     const palette = document.querySelector("#damage-type-palette");
-    const markers = document.querySelector("#inspection-markers");
     const markList = document.querySelector("#inspection-mark-list");
     const hint = document.querySelector("#inspection-hint");
     palette.replaceChildren();
-    markers.replaceChildren();
     markList.replaceChildren();
+    window.__rentalcarInspectionState = { marks: inspectionMarks, damageTypes, selectedTypeId: selectedDamageTypeId };
+    document.querySelector("#inspection-car-view")
+      .dispatchEvent(new CustomEvent("inspection:state", { detail: window.__rentalcarInspectionState }));
     for (const type of damageTypes) {
       const button = document.createElement("button");
       button.type = "button";
@@ -1003,74 +1090,34 @@
       empty.textContent = "問題種類はありません。「評価項目・損傷種類を管理」から追加できます。";
       palette.append(empty);
     }
-    inspectionMarks.forEach((mark, index) => {
+    inspectionMarks.forEach((mark) => {
       const type = damageTypes.find((entry) => entry.id === mark.damage_type_id);
       if (!type) return;
-      const marker = document.createElement("button");
-      marker.type = "button";
-      marker.className = "inspection-marker";
-      marker.style.left = `${mark.x * 100}%`;
-      marker.style.top = `${mark.y * 100}%`;
-      marker.style.backgroundColor = type.color;
-      marker.textContent = type.icon;
-      marker.title = `${type.name}（クリックして削除）`;
-      marker.setAttribute("aria-label", `${type.name}の記録を削除`);
-      marker.addEventListener("click", (event) => {
-        event.stopPropagation();
-        inspectionMarks.splice(index, 1);
+      const entry = document.createElement("div");
+      entry.className = "inspection-mark-entry";
+      const label = document.createElement("span");
+      label.textContent = `${type.icon} ${type.name}`;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", `${type.name}の損傷マークを削除`);
+      remove.addEventListener("click", () => {
+        inspectionMarks = inspectionMarks.filter((entryMark) => entryMark.id !== mark.id);
         renderInspectionDiagram();
       });
-      markers.append(marker);
-      const entry = document.createElement("span");
-      entry.className = "inspection-mark-entry";
-      entry.textContent = `${type.icon} ${type.name} · ${Math.round(mark.x * 100)}%, ${Math.round(mark.y * 100)}%`;
+      entry.append(label, remove);
       markList.append(entry);
     });
     hint.textContent = selectedDamageTypeId
       ? `${damageTypes.find((type) => type.id === selectedDamageTypeId)?.name || ""}：車体図をタップして記録`
       : damageTypes.length
-        ? "問題の種類をドラッグするか、選択して車体図をタップしてください。"
+        ? "問題の種類を選び、回転できる車体モデルの表面をタップしてください。"
         : "先に問題種類を追加してください。";
   }
 
   function addInspectionMark(typeId, clientX, clientY) {
-    const view = document.querySelector("#inspection-car-view");
-    const rect = view.getBoundingClientRect();
     const type = damageTypes.find((entry) => entry.id === typeId);
-    if (!type || clientX < rect.left || clientX > rect.right ||
-        clientY < rect.top || clientY > rect.bottom) return false;
-    const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    const y = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
-    const body = [
-      [103 / 600, 215 / 340], [145 / 600, 171 / 340], [184 / 600, 157 / 340],
-      [236 / 600, 97 / 340], [283 / 600, 76 / 340], [357 / 600, 78 / 340],
-      [412 / 600, 140 / 340], [489 / 600, 164 / 340], [516 / 600, 201 / 340],
-      [511 / 600, 239 / 340], [468 / 600, 259 / 340], [150 / 600, 261 / 340],
-      [109 / 600, 244 / 340],
-    ];
-    let inside = false;
-    for (let current = 0, previous = body.length - 1; current < body.length; previous = current++) {
-      const [currentX, currentY] = body[current];
-      const [previousX, previousY] = body[previous];
-      if ((currentY > y) !== (previousY > y) &&
-          x < (previousX - currentX) * (y - currentY) / (previousY - currentY) + currentX) {
-        inside = !inside;
-      }
-    }
-    const inWheel = [[182 / 600, 246 / 340, 30 / 600], [436 / 600, 244 / 340, 32 / 600]]
-      .some(([centerX, centerY, radius]) => Math.hypot(x - centerX, y - centerY) <= radius);
-    if (!inside && !inWheel) {
-      document.querySelector("#inspection-hint").textContent = "マークは車両イラスト上に置いてください。";
-      return false;
-    }
-    inspectionMarks.push({
-      id: crypto.randomUUID(),
-      damage_type_id: type.id,
-      x,
-      y,
-    });
-    selectedDamageTypeId = null;
-    renderInspectionDiagram();
+    if (!type || !window.RentalCarInspection3D?.placeAt(type.id, clientX, clientY)) return false;
     return true;
   }
 
@@ -1356,6 +1403,8 @@
     formError.textContent = "";
     document.querySelector("#dialog-title").textContent = vehicle ? "車両情報を編集" : "車両を追加";
     document.querySelector("#manage-assessment-button").hidden = !canManage;
+    document.querySelector("#manage-options-button").hidden = !canManage;
+    document.querySelector("#manage-vehicle-statuses-button").hidden = !canManage;
     document.querySelector("#delete-vehicle").hidden = !vehicle || !canManage;
     const defaultLot = lots.find((lot) => lot.name === "予備") || lots[0];
     document.querySelector(".default-location-note").textContent =
@@ -1363,9 +1412,7 @@
     vehicleForm.elements.id.value = vehicle?.id || "";
     vehicleForm.elements.plate.value = vehicle?.plate || "";
     vehicleForm.elements.vehicle_type.value = vehicle?.vehicle_type || vehicleTypes[0] || "";
-    for (const input of vehicleForm.querySelectorAll('input[name="options"]')) {
-      input.checked = Boolean(vehicle?.options?.includes(input.value));
-    }
+    renderVehicleOptions(vehicle);
     renderVehicleStatusOptions(vehicle);
     inspectionMarks = vehicle?.inspection_marks?.map((mark) => ({ ...mark })) || [];
     selectedDamageTypeId = null;
@@ -1447,10 +1494,18 @@
   document.querySelector("#manage-locations-button").addEventListener("click", openLocationManager);
   document.querySelector("#manage-franchises-button").addEventListener("click", openFranchiseManager);
   document.querySelector("#manage-statuses-button").addEventListener("click", openStatusManager);
+  document.querySelector("#manage-vehicle-statuses-button").addEventListener("click", openStatusManager);
+  document.querySelector("#manage-options-button").addEventListener("click", () => {
+    document.querySelector("#option-error").textContent = "";
+    renderOptionManager();
+    document.querySelector("#option-dialog").showModal();
+  });
   document.querySelector("#manage-assessment-button").addEventListener("click", openAssessmentManager);
   document.querySelector("#close-location-dialog").addEventListener("click", () => locationDialog.close());
   document.querySelector("#close-franchise-dialog").addEventListener("click", () => franchiseDialog.close());
   document.querySelector("#close-status-dialog").addEventListener("click", () => statusDialog.close());
+  document.querySelector("#close-option-dialog").addEventListener("click", () =>
+    document.querySelector("#option-dialog").close());
   document.querySelector("#close-assessment-manager").addEventListener("click", () => assessmentManagerDialog.close());
   document.querySelector("#add-status-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1466,8 +1521,31 @@
       form.reset();
       await loadBoard();
       renderStatusManager();
+      renderVehicleStatusOptions({
+        status_ids: [...document.querySelectorAll('input[name="status_ids"]:checked')].map((input) => Number(input.value)),
+      });
     } catch (error) {
       statusError.textContent = error.message;
+    }
+  });
+  document.querySelector("#add-option-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const error = document.querySelector("#option-error");
+    error.textContent = "";
+    if (!form.reportValidity()) return;
+    try {
+      await api("/api/vehicle-options", {
+        method: "POST",
+        body: JSON.stringify({ name: new FormData(form).get("name") }),
+      });
+      const selected = [...document.querySelectorAll('input[name="options"]:checked')].map((input) => input.value);
+      form.reset();
+      await loadBoard();
+      renderVehicleOptions({ options: selected });
+      renderOptionManager();
+    } catch (failure) {
+      error.textContent = failure.message;
     }
   });
   document.querySelector("#add-assessment-field-form").addEventListener("submit", async (event) => {
@@ -1562,15 +1640,15 @@
   });
   document.querySelector("#close-dialog").addEventListener("click", () => dialog.close());
   document.querySelector("#cancel-dialog").addEventListener("click", () => dialog.close());
-  document.querySelector("#inspection-car-view").addEventListener("click", (event) => {
-    if (suppressDamageClick) return;
-    if (!selectedDamageTypeId) {
-      document.querySelector("#inspection-hint").textContent = "先に問題の種類を選ぶか、車体図へドラッグしてください。";
-      return;
-    }
-    if (addInspectionMark(selectedDamageTypeId, event.clientX, event.clientY)) {
-      document.querySelector("#inspection-hint").textContent = "損傷位置を記録しました。マーカーをクリックすると削除できます。";
-    }
+  document.querySelector("#inspection-car-view").addEventListener("inspection:mark", (event) => {
+    inspectionMarks.push(event.detail);
+    selectedDamageTypeId = null;
+    renderInspectionDiagram();
+    document.querySelector("#inspection-hint").textContent = "損傷位置を記録しました。車両の保存時に一緒に保存されます。";
+  });
+  document.querySelector("#inspection-car-view").addEventListener("inspection:delete-mark", (event) => {
+    inspectionMarks = inspectionMarks.filter((mark) => mark.id !== event.detail.id);
+    renderInspectionDiagram();
   });
   document.querySelector("#delete-vehicle").addEventListener("click", async () => {
     if (!canManage) return;

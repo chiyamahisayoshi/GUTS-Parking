@@ -10,7 +10,7 @@ const LOT_NAMES = [
   "立駐",
 ];
 const VEHICLE_TYPES = ["A-1", "A-2", "A-2P", "B", "B軽トラ", "C-1", "C-2", "D", "H-1", "H-2", "その他"];
-const VEHICLE_OPTIONS = ["ETC", "車載器", "禁煙", "喫煙", "ナビ", "スタッドレス"];
+const DEFAULT_VEHICLE_OPTIONS = ["ETC", "車載器", "禁煙", "喫煙", "ナビ", "スタッドレス"];
 const DEFAULT_STATUSES = [
   { key: "unwashed", name: "洗車待ち", icon: "🫧" },
   { key: "no_fuel", name: "給油待ち", icon: "⛽" },
@@ -62,6 +62,18 @@ function seedTenantAssessment(db, tenantId) {
   for (const type of DEFAULT_DAMAGE_TYPES) {
     addDamageType.run(tenantId, type.key, type.name, type.icon, type.color);
   }
+}
+
+function seedTenantVehicleOptions(db, tenantId) {
+  const addOption = db.prepare(`
+    INSERT OR IGNORE INTO vehicle_option_types (tenant_id, name, built_in_key)
+    SELECT ?, ?, ?
+    WHERE NOT EXISTS (
+      SELECT 1 FROM vehicle_option_suppressions
+      WHERE tenant_id = ? AND built_in_key = ?
+    )
+  `);
+  for (const name of DEFAULT_VEHICLE_OPTIONS) addOption.run(tenantId, name, name, tenantId, name);
 }
 
 function openDatabase(databasePath) {
@@ -352,7 +364,10 @@ function openDatabase(databasePath) {
       vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
       damage_type_id INTEGER NOT NULL REFERENCES vehicle_damage_types(id) ON DELETE CASCADE,
       x REAL NOT NULL CHECK(x >= 0 AND x <= 1),
-      y REAL NOT NULL CHECK(y >= 0 AND y <= 1)
+      y REAL NOT NULL CHECK(y >= 0 AND y <= 1),
+      world_x REAL,
+      world_y REAL,
+      world_z REAL
     );
     CREATE INDEX IF NOT EXISTS vehicle_assessment_fields_tenant_idx
       ON vehicle_assessment_fields(tenant_id, group_key, display_order);
@@ -360,7 +375,39 @@ function openDatabase(databasePath) {
       ON vehicle_assessment_values(field_id);
     CREATE INDEX IF NOT EXISTS vehicle_damage_types_tenant_idx ON vehicle_damage_types(tenant_id);
     CREATE INDEX IF NOT EXISTS vehicle_damage_marks_vehicle_idx ON vehicle_damage_marks(vehicle_id);
+    CREATE TABLE IF NOT EXISTS vehicle_option_types (
+      id INTEGER PRIMARY KEY,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      built_in_key TEXT,
+      UNIQUE (tenant_id, name COLLATE NOCASE),
+      UNIQUE (tenant_id, built_in_key)
+    );
+    CREATE TABLE IF NOT EXISTS vehicle_option_suppressions (
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      built_in_key TEXT NOT NULL,
+      PRIMARY KEY (tenant_id, built_in_key)
+    );
+    CREATE INDEX IF NOT EXISTS vehicle_option_types_tenant_idx ON vehicle_option_types(tenant_id, id);
   `);
+  const optionColumns = new Set(
+    db.prepare("PRAGMA table_info(vehicle_option_types)").all().map((column) => column.name),
+  );
+  if (!optionColumns.has("built_in_key")) {
+    db.exec("ALTER TABLE vehicle_option_types ADD COLUMN built_in_key TEXT");
+  }
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS vehicle_option_types_builtin_idx ON vehicle_option_types(tenant_id, built_in_key)");
+  const damageMarkColumns = new Set(
+    db.prepare("PRAGMA table_info(vehicle_damage_marks)").all().map((column) => column.name),
+  );
+  for (const column of ["world_x", "world_y", "world_z"]) {
+    if (!damageMarkColumns.has(column)) {
+      db.exec(`ALTER TABLE vehicle_damage_marks ADD COLUMN ${column} REAL`);
+    }
+  }
+  for (const tenant of db.prepare("SELECT id FROM tenants").all()) {
+    seedTenantVehicleOptions(db, tenant.id);
+  }
   const statusMigration = "custom-vehicle-statuses-v1";
   if (!db.prepare("SELECT 1 FROM schema_migrations WHERE name = ?").get(statusMigration)) {
     db.exec("BEGIN IMMEDIATE");
@@ -409,9 +456,9 @@ module.exports = {
   ASSESSMENT_FIELD_TYPES,
   DEFAULT_STATUSES,
   LOT_NAMES,
-  VEHICLE_OPTIONS,
   VEHICLE_TYPES,
   openDatabase,
   seedTenantAssessment,
   seedTenantStatuses,
+  seedTenantVehicleOptions,
 };

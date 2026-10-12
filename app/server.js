@@ -14,16 +14,17 @@ const {
   ASSESSMENT_FIELD_TYPES,
   DEFAULT_STATUSES,
   LOT_NAMES,
-  VEHICLE_OPTIONS,
   VEHICLE_TYPES,
   openDatabase,
   seedTenantAssessment,
   seedTenantStatuses,
+  seedTenantVehicleOptions,
 } = require("./db");
 const { SQLiteSessionStore } = require("./session-store");
 const { hashPassword, verifyPassword } = require("./security");
 
 const STATIC_DIR = path.resolve(__dirname, "..", "static");
+const THREE_BUILD_DIR = path.resolve(__dirname, "..", "node_modules", "three", "build");
 const STATUSES = DEFAULT_STATUSES.map((status) => status.key);
 const POSITION_GRID = Array.from({ length: 32 }, (_, index) => [
   [0.125, 0.375, 0.625, 0.875][index % 4],
@@ -43,6 +44,17 @@ function isGoogleMapsUrl(value) {
   } catch {
     return false;
   }
+}
+
+function vehicleOptionsAreValid(db, options, tenantId) {
+  if (!Array.isArray(options) || options.some((name) =>
+    typeof name !== "string" || !name.trim() || name.length > 40) ||
+      new Set(options).size !== options.length) return false;
+  if (!options.length) return true;
+  const placeholders = options.map(() => "?").join(", ");
+  return db.prepare(
+    `SELECT COUNT(*) AS count FROM vehicle_option_types WHERE tenant_id = ? AND name IN (${placeholders})`,
+  ).get(tenantId, ...options).count === options.length;
 }
 
 class RealtimeBoard {
@@ -177,7 +189,8 @@ function vehicleResponse(db, row) {
     "SELECT field_id, value FROM vehicle_assessment_values WHERE vehicle_id = ? ORDER BY field_id",
   ).all(row.id).map((entry) => [entry.field_id, entry.value]));
   vehicle.inspection_marks = db.prepare(`
-    SELECT m.id, m.damage_type_id, m.x, m.y, t.name, t.icon, t.color
+    SELECT m.id, m.damage_type_id, m.x, m.y, m.world_x, m.world_y, m.world_z,
+           t.name, t.icon, t.color
     FROM vehicle_damage_marks m
     JOIN vehicle_damage_types t ON t.id = m.damage_type_id
     WHERE m.vehicle_id = ? ORDER BY m.rowid
@@ -233,6 +246,10 @@ function inspectionMarksAreValid(db, marks, tenantId) {
         ![mark.x, mark.y].every((coordinate) =>
           typeof coordinate === "number" && Number.isFinite(coordinate) &&
           coordinate >= 0 && coordinate <= 1) ||
+        (["world_x", "world_y", "world_z"].some((key) => Object.hasOwn(mark, key)) &&
+          !["world_x", "world_y", "world_z"].every((key) =>
+            typeof mark[key] === "number" && Number.isFinite(mark[key]) &&
+            mark[key] >= -3 && mark[key] <= 3)) ||
         !db.prepare("SELECT 1 FROM vehicle_damage_types WHERE id = ? AND tenant_id = ?")
           .get(mark.damage_type_id, tenantId)) return false;
     ids.add(mark.id);
@@ -254,11 +271,15 @@ function saveInspectionData(db, vehicleId, values, marks) {
   if (marks !== undefined) {
     db.prepare("DELETE FROM vehicle_damage_marks WHERE vehicle_id = ?").run(vehicleId);
     const saveMark = db.prepare(`
-      INSERT INTO vehicle_damage_marks (id, vehicle_id, damage_type_id, x, y)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO vehicle_damage_marks
+        (id, vehicle_id, damage_type_id, x, y, world_x, world_y, world_z)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     for (const mark of marks) {
-      saveMark.run(mark.id, vehicleId, mark.damage_type_id, mark.x, mark.y);
+      saveMark.run(
+        mark.id, vehicleId, mark.damage_type_id, mark.x, mark.y,
+        mark.world_x ?? null, mark.world_y ?? null, mark.world_z ?? null,
+      );
     }
   }
 }
@@ -383,6 +404,7 @@ function createApplication(options = {}) {
   }
 
   app.use("/static", express.static(STATIC_DIR));
+  app.use("/vendor", express.static(THREE_BUILD_DIR, { maxAge: "1d" }));
   app.use(express.static(STATIC_DIR));
   app.get("/api/me", (request, response) => {
     if (!request.session.username) return response.json({ authenticated: false, version });
@@ -505,6 +527,7 @@ function createApplication(options = {}) {
     const inspectionMarks = new Map();
     for (const mark of db.prepare(`
       SELECT m.id, m.vehicle_id, m.damage_type_id, m.x, m.y,
+             m.world_x, m.world_y, m.world_z,
              t.name, t.icon, t.color
       FROM vehicle_damage_marks m
       JOIN vehicles v ON v.id = m.vehicle_id
@@ -529,6 +552,9 @@ function createApplication(options = {}) {
       SELECT id, built_in_key, name, icon, color
       FROM vehicle_damage_types WHERE tenant_id = ? ORDER BY id
     `).all(request.tenantId);
+    const vehicleOptions = db.prepare(
+      "SELECT id, name FROM vehicle_option_types WHERE tenant_id = ? ORDER BY id",
+    ).all(request.tenantId);
     response.json({
       parking_lots: parkingLots,
       vehicles,
@@ -536,7 +562,7 @@ function createApplication(options = {}) {
       assessment_fields: assessmentFields,
       damage_types: damageTypes,
       vehicle_types: VEHICLE_TYPES,
-      vehicle_options: VEHICLE_OPTIONS,
+      vehicle_options: vehicleOptions,
     });
   });
 
@@ -582,6 +608,7 @@ function createApplication(options = {}) {
         tenantId = Number(tenantResult.lastInsertRowid);
         seedTenantStatuses(db, tenantId);
         seedTenantAssessment(db, tenantId);
+        seedTenantVehicleOptions(db, tenantId);
         db.prepare(`
           INSERT INTO users (username, password_hash, role, tenant_id)
           VALUES (?, ?, 'admin', ?)
@@ -834,6 +861,67 @@ function createApplication(options = {}) {
     }
   });
 
+  app.post("/api/vehicle-options", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
+    if (!name || name.length > 40) {
+      return response.status(422).json({ detail: "オプション名は1〜40文字で入力してください。" });
+    }
+    try {
+      const result = db.prepare(
+        "INSERT INTO vehicle_option_types (tenant_id, name) VALUES (?, ?)",
+      ).run(request.tenantId, name);
+      realtime.notify(request.tenantId);
+      response.status(201).json(db.prepare(
+        "SELECT id, name FROM vehicle_option_types WHERE id = ? AND tenant_id = ?",
+      ).get(result.lastInsertRowid, request.tenantId));
+    } catch (error) {
+      if (isUniqueConstraint(error)) {
+        return response.status(409).json({ detail: "同じ名前のオプションは既に登録されています。" });
+      }
+      next(error);
+    }
+  });
+
+  app.delete("/api/vehicle-options/:id", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const optionId = parseVehicleId(request.params.id);
+    if (optionId === null) return response.status(404).json({ detail: "オプションが見つかりません。" });
+    const option = db.prepare(
+      "SELECT id, name, built_in_key FROM vehicle_option_types WHERE id = ? AND tenant_id = ?",
+    ).get(optionId, request.tenantId);
+    if (!option) return response.status(404).json({ detail: "オプションが見つかりません。" });
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const vehicles = db.prepare("SELECT id, options FROM vehicles WHERE tenant_id = ?")
+          .all(request.tenantId);
+        const updateVehicleOptions = db.prepare("UPDATE vehicles SET options = ? WHERE id = ?");
+        for (const vehicle of vehicles) {
+          const savedOptions = JSON.parse(vehicle.options || "[]");
+          const nextOptions = savedOptions.filter((name) => name !== option.name);
+          if (nextOptions.length !== savedOptions.length) {
+            updateVehicleOptions.run(JSON.stringify(nextOptions), vehicle.id);
+          }
+        }
+        if (option.built_in_key) {
+          db.prepare(`
+            INSERT OR IGNORE INTO vehicle_option_suppressions (tenant_id, built_in_key)
+            VALUES (?, ?)
+          `).run(request.tenantId, option.built_in_key);
+        }
+        db.prepare("DELETE FROM vehicle_option_types WHERE id = ? AND tenant_id = ?")
+          .run(optionId, request.tenantId);
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      realtime.notify(request.tenantId);
+      response.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/assessment-fields", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
     const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
     const type = request.body?.field_type;
@@ -1002,8 +1090,7 @@ function createApplication(options = {}) {
         position = getNextPosition(db, lotId);
       }
       const options = body.options ?? [];
-      if (!Array.isArray(options) || options.some((option) => !VEHICLE_OPTIONS.includes(option)) ||
-          new Set(options).size !== options.length) {
+      if (!vehicleOptionsAreValid(db, options, request.tenantId)) {
         return response.status(422).json({ detail: "Invalid vehicle options." });
       }
       if (STATUSES.some((status) => Object.hasOwn(body, status) && typeof body[status] !== "boolean")) {
@@ -1125,8 +1212,7 @@ function createApplication(options = {}) {
         return response.status(422).json({ detail: "Unknown vehicle type." });
       }
       if (Object.hasOwn(data, "options")) {
-        if (!Array.isArray(data.options) || data.options.some((option) => !VEHICLE_OPTIONS.includes(option)) ||
-            new Set(data.options).size !== data.options.length) {
+        if (!vehicleOptionsAreValid(db, data.options, request.tenantId)) {
           return response.status(422).json({ detail: "Invalid vehicle options." });
         }
         data.options = JSON.stringify(data.options);
