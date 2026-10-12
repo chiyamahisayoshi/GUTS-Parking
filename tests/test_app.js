@@ -60,6 +60,15 @@ test("serves the browser UI but protects vehicle data until login", async () => 
   assert.equal((await agent.get("/api/bootstrap")).status, 401);
 });
 
+test("uses full-width parking cards and compact controls on phone layouts", () => {
+  const stylesheet = fs.readFileSync(path.join(__dirname, "..", "static", "style.css"), "utf8");
+  const phoneLayout = stylesheet.slice(stylesheet.indexOf("@media (max-width: 560px)"));
+  assert.match(phoneLayout, /\.parking-grid\s*\{\s*display:\s*grid;\s*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(phoneLayout, /\.lot-card\s*\{\s*width:\s*100%;\s*max-width:\s*100%/);
+  assert.match(phoneLayout, /\.topbar\s*\{\s*min-height:\s*62px;\s*height:\s*auto/);
+  assert.match(stylesheet, /\.lot-markings\.editable\.drawing\s*\{[^}]*touch-action:\s*none/);
+});
+
 test("keeps HTTPS asset upgrades enabled when secure cookies are configured", async () => {
   const secureApplication = createApplication({
     databasePath: ":memory:",
@@ -169,6 +178,8 @@ test("operator accounts can use the board but cannot add vehicles or manage loca
     vehicle_type: "A-1",
   })).status, 403);
   assert.equal((await staffAgent.post("/api/parking-lots").send({ name: "staff-add-denied" })).status, 403);
+  assert.equal((await staffAgent.delete("/api/parking-lots/13")).status, 403);
+  assert.equal((await staffAgent.delete("/api/franchises/2").send({ confirmation_name: "anything" })).status, 403);
   assert.equal((await staffAgent.patch("/api/parking-lots/1").send({ name: "staff-rename-denied" })).status, 403);
   assert.equal((await staffAgent.put("/api/parking-lots/order").send({
     ids: Array.from({ length: 13 }, (_, index) => index + 1),
@@ -219,6 +230,21 @@ test("headquarters can create isolated franchise stores and suspend or restore a
   assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
     parking_lot_id: franchiseBoard.parking_lots[0].id,
   })).status, 422);
+  const franchiseMarking = [{
+    id: "franchise-boundary",
+    color: "#336699",
+    x1: 0.1,
+    y1: 0.1,
+    x2: 0.9,
+    y2: 0.9,
+  }];
+  assert.equal((await franchiseAgent.patch(`/api/parking-lots/${franchiseBoard.parking_lots[0].id}`)
+    .send({ markings: franchiseMarking })).status, 200);
+  assert.deepEqual(
+    (await franchiseAgent.get("/api/bootstrap")).body.parking_lots[0].markings,
+    franchiseMarking,
+  );
+  assert.deepEqual((await agent.get("/api/bootstrap")).body.parking_lots[0].markings, []);
 
   const franchiseVehicle = await franchiseAgent.post("/api/vehicles").send({
     plate: "東店 500 あ 0001",
@@ -229,6 +255,7 @@ test("headquarters can create isolated franchise stores and suspend or restore a
   assert.equal((await franchiseAgent.patch(`/api/vehicles/${vehicleId}`).send({ no_fuel: true })).status, 404);
   assert.equal((await franchiseAgent.delete(`/api/vehicles/${vehicleId}`)).status, 404);
   assert.equal((await franchiseAgent.get("/api/franchises")).status, 403);
+  assert.equal((await franchiseAgent.delete(`/api/parking-lots/${headquartersBoard.parking_lots[0].id}`)).status, 404);
   assert.equal(
     (await agent.get("/api/bootstrap")).body.vehicles.some((vehicle) => vehicle.plate === "東店 500 あ 0001"),
     false,
@@ -264,6 +291,20 @@ test("headquarters can create isolated franchise stores and suspend or restore a
   })).status, 403);
   assert.equal((await agent.patch(`/api/franchises/${franchise.id}/status`).send({ is_active: true })).status, 200);
   assert.equal((await franchiseAgent.get("/api/bootstrap")).status, 200);
+  assert.equal((await agent.delete(`/api/franchises/${franchise.id}`)
+    .send({ confirmation_name: "wrong name" })).status, 422);
+  const deletionSocket = new WebSocket(`${baseUrl.replace("http", "ws")}/ws`, {
+    headers: { Cookie: franchiseCookie, Origin: baseUrl },
+  });
+  await once(deletionSocket, "open");
+  const deletionSocketClosed = once(deletionSocket, "close");
+  assert.equal((await agent.delete(`/api/franchises/${franchise.id}`)
+    .send({ confirmation_name: franchise.name })).status, 204);
+  const [deletionCode] = await deletionSocketClosed;
+  assert.equal(deletionCode, 4004);
+  assert.equal((await franchiseAgent.get("/api/bootstrap")).status, 401);
+  assert.equal(application.db.prepare("SELECT 1 FROM tenants WHERE id = ?").get(franchise.id), undefined);
+  assert.equal(application.db.prepare("SELECT 1 FROM vehicles WHERE tenant_id = ?").get(franchise.id), undefined);
   const headquartersSocketClosed = once(headquartersSocket, "close");
   headquartersSocket.close();
   await headquartersSocketClosed;
@@ -541,6 +582,83 @@ test("adds locations and renames them without moving their vehicles", async () =
   assert.equal((await request(server).post("/api/parking-lots").send({ name: "認証なし" })).status, 401);
 });
 
+test("saves, validates, and clears colored parking location lines", async () => {
+  const lot = (await agent.get("/api/bootstrap")).body.parking_lots[0];
+  const markings = [{
+    id: "driveway-center",
+    color: "#e34b4b",
+    x1: 0.1,
+    y1: 0.25,
+    x2: 0.9,
+    y2: 0.75,
+  }];
+  const saved = await agent.patch(`/api/parking-lots/${lot.id}`).send({ markings });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.body.markings, markings);
+  assert.deepEqual(
+    (await agent.get("/api/bootstrap")).body.parking_lots.find((entry) => entry.id === lot.id).markings,
+    markings,
+  );
+  assert.equal((await agent.patch(`/api/parking-lots/${lot.id}`).send({
+    markings: [{ ...markings[0], color: "red" }],
+  })).status, 422);
+  assert.equal((await agent.patch(`/api/parking-lots/${lot.id}`).send({
+    markings: [{ ...markings[0], x2: 1.01 }],
+  })).status, 422);
+  assert.equal((await agent.patch(`/api/parking-lots/${lot.id}`).send({
+    markings: Array.from({ length: 101 }, (_, index) => ({ ...markings[0], id: `line-${index}` })),
+  })).status, 422);
+  assert.equal((await agent.patch(`/api/parking-lots/${lot.id}`).send({ markings: [] })).status, 200);
+  assert.deepEqual(
+    (await agent.get("/api/bootstrap")).body.parking_lots.find((entry) => entry.id === lot.id).markings,
+    [],
+  );
+});
+
+test("deletes empty parking locations but protects occupied locations and tenant data", async () => {
+  const lot = await agent.post("/api/parking-lots").send({ name: "削除対象位置" });
+  assert.equal(lot.status, 201);
+  assert.equal((await agent.delete(`/api/parking-lots/${lot.body.id}`)).status, 204);
+  assert.equal((await agent.get("/api/bootstrap")).body.parking_lots.some((entry) => entry.id === lot.body.id), false);
+  assert.equal((await agent.delete("/api/parking-lots/1")).status, 409);
+  const reserve = (await agent.get("/api/bootstrap")).body.parking_lots.find((entry) => entry.name === "予備");
+  assert.equal((await agent.delete(`/api/parking-lots/${reserve.id}`)).status, 204);
+  const afterReserveRemoval = (await agent.post("/api/vehicles").send({
+    plate: "予備削除後テスト",
+    vehicle_type: "A-1",
+  }));
+  assert.equal(afterReserveRemoval.status, 201);
+  assert.equal(afterReserveRemoval.body.parking_lot_id,
+    (await agent.get("/api/bootstrap")).body.parking_lots[0].id);
+  const lastLocationStore = await agent.post("/api/franchises").send({
+    name: "最後の位置検証店",
+    username: "last-location-admin",
+    password: "franchise-password-strong",
+  });
+  const lastLocationAgent = request.agent(server);
+  await lastLocationAgent.post("/api/login").send({
+    username: "last-location-admin",
+    password: "franchise-password-strong",
+  });
+  const storeLots = (await lastLocationAgent.get("/api/bootstrap")).body.parking_lots;
+  for (const location of storeLots.slice(0, -1)) {
+    assert.equal((await lastLocationAgent.delete(`/api/parking-lots/${location.id}`)).status, 204);
+  }
+  assert.equal((await lastLocationAgent.delete(`/api/parking-lots/${storeLots.at(-1).id}`)).status, 409);
+  assert.equal((await agent.delete(`/api/franchises/${lastLocationStore.body.franchise.id}`)
+    .send({ confirmation_name: "最後の位置検証店" })).status, 204);
+  const franchise = await agent.post("/api/franchises").send({
+    name: "位置削除検証店",
+    username: "lot-delete-admin",
+    password: "franchise-password-strong",
+  });
+  assert.equal(franchise.status, 201);
+  const franchiseLot = application.db.prepare(
+    "SELECT id FROM parking_lots WHERE tenant_id = ? ORDER BY id LIMIT 1",
+  ).get(franchise.body.franchise.id);
+  assert.equal((await agent.delete(`/api/parking-lots/${franchiseLot.id}`)).status, 404);
+});
+
 test("flattens previous board sections into peer locations without losing vehicle data", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rentalcar-migration-"));
   const databasePath = path.join(directory, "legacy.db");
@@ -610,6 +728,7 @@ test("flattens previous board sections into peer locations without losing vehicl
     const lot = migrated.prepare("SELECT * FROM parking_lots WHERE id = 4").get();
     assert.deepEqual([lot.display_order, lot.area_height, lot.area_width], [3, 210, 50]);
     assert.equal(lot.navigation_url, "");
+    assert.equal(lot.markings, "[]");
     assert.equal(migrated.prepare("PRAGMA table_info(users)").all().find((column) =>
       column.name === "role").dflt_value, "'admin'");
     assert.deepEqual(
