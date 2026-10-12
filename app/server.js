@@ -8,6 +8,7 @@ const cookie = require("cookie");
 const signature = require("cookie-signature");
 const { rateLimit } = require("express-rate-limit");
 const { WebSocket, WebSocketServer } = require("ws");
+const { version } = require("../package.json");
 
 const {
   ASSESSMENT_FIELD_TYPES,
@@ -384,16 +385,17 @@ function createApplication(options = {}) {
   app.use("/static", express.static(STATIC_DIR));
   app.use(express.static(STATIC_DIR));
   app.get("/api/me", (request, response) => {
-    if (!request.session.username) return response.json({ authenticated: false });
+    if (!request.session.username) return response.json({ authenticated: false, version });
     const user = db.prepare(`
       SELECT u.role, u.tenant_id, t.name AS tenant_name, t.is_active, t.is_headquarters
       FROM users u JOIN tenants t ON t.id = u.tenant_id
       WHERE u.username = ?
     `).get(request.session.username);
-    if (!user) return response.json({ authenticated: false });
-    if (!user.is_active) return response.json({ authenticated: false, suspended: true });
+    if (!user) return response.json({ authenticated: false, version });
+    if (!user.is_active) return response.json({ authenticated: false, suspended: true, version });
     response.json({
       authenticated: true,
+      version,
       username: request.session.username,
       can_manage: user.role === "admin",
       can_manage_franchises: user.role === "admin" && Boolean(user.is_headquarters),

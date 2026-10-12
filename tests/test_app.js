@@ -7,6 +7,7 @@ const { spawnSync } = require("node:child_process");
 const { after, before, test } = require("node:test");
 const { WebSocket } = require("ws");
 const request = require("supertest");
+const { version: appVersion } = require("../package.json");
 
 process.env.SESSION_SECRET ||= "test-only-session-secret-value-123456";
 
@@ -53,9 +54,12 @@ after(async () => {
 test("serves the browser UI but protects vehicle data until login", async () => {
   const page = await request(server).get("/");
   assert.equal(page.status, 200);
+  assert.match(page.text, /data-app-version/);
   assert.doesNotMatch(page.headers["content-security-policy"], /upgrade-insecure-requests/);
-  assert.equal((await request(server).get("/static/app.js")).status, 200);
-  assert.deepEqual((await request(server).get("/api/me")).body, { authenticated: false });
+  const appScript = await request(server).get("/static/app.js");
+  assert.equal(appScript.status, 200);
+  assert.match(appScript.text, /setAppVersion/);
+  assert.deepEqual((await request(server).get("/api/me")).body, { authenticated: false, version: appVersion });
   assert.equal((await request(server).get("/api/bootstrap")).status, 401);
   assert.equal((await agent.get("/api/bootstrap")).status, 401);
 });
@@ -115,6 +119,7 @@ test("logs in with hashed credentials and seeds thirteen peer locations", async 
   sessionCookie = login.headers["set-cookie"][0].split(";")[0];
   assert.deepEqual((await agent.get("/api/me")).body, {
     authenticated: true,
+    version: appVersion,
     username: "operator",
     can_manage: true,
     can_manage_franchises: true,
@@ -314,6 +319,7 @@ test("operator accounts can use the board but cannot add vehicles or manage loca
   assert.equal(login.body.can_manage, false);
   assert.deepEqual((await staffAgent.get("/api/me")).body, {
     authenticated: true,
+    version: appVersion,
     username: "staff",
     can_manage: false,
     can_manage_franchises: false,

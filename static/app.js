@@ -77,6 +77,14 @@
     loadBoard().catch(showError);
   }
 
+  function setAppVersion(version) {
+    if (!/^\d+\.\d+\.\d+$/.test(version || "")) return;
+    document.querySelectorAll("[data-app-version]").forEach((element) => {
+      element.textContent = `v${version}`;
+    });
+    document.title = `Rental Car Board v${version}`;
+  }
+
   function showError(error) {
     console.error(error);
     formError.textContent = error.message;
@@ -1609,6 +1617,7 @@
     });
   });
   api("/api/me").then((result) => {
+    setAppVersion(result.version);
     if (result.authenticated) {
       showBoard(result.username, result.can_manage, result.can_manage_franchises, result.tenant_name);
     } else {
