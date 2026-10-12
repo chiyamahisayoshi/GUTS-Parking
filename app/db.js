@@ -16,6 +16,24 @@ const DEFAULT_STATUSES = [
   { key: "no_fuel", name: "給油待ち", icon: "⛽" },
   { key: "needs_repair", name: "要修理", icon: "🔧" },
 ];
+const DEFAULT_ASSESSMENT_FIELDS = [
+  { key: "exterior", group: "body", name: "外装（ボディ・塗装・鈑金）", type: "rating", sort: 0 },
+  { key: "interior", group: "body", name: "内装（シート・天井・フロア）", type: "rating", sort: 1 },
+  { key: "wheels", group: "body", name: "ホイール", type: "rating", sort: 2 },
+  { key: "registration_document", group: "electrical", name: "車検証", type: "checkbox", sort: 0, suffix: "確認済み" },
+  { key: "radio", group: "electrical", name: "ラジオ", type: "checkbox", sort: 1 },
+  { key: "navigation", group: "electrical", name: "ナビ（５年以内）", type: "checkbox", sort: 2 },
+  { key: "air_conditioning", group: "electrical", name: "エアコン", type: "checkbox", sort: 3 },
+  { key: "side_mirror", group: "electrical", name: "サイドミラー調整", type: "checkbox", sort: 4 },
+  { key: "mileage", group: "basic", name: "走行距離", type: "number", sort: 0, suffix: "km" },
+  { key: "registration_year", group: "basic", name: "初年度登録（年）", type: "number", sort: 1, suffix: "年" },
+  { key: "registration_month", group: "basic", name: "初年度登録（月）", type: "number", sort: 2, suffix: "月" },
+];
+const DEFAULT_DAMAGE_TYPES = [
+  { key: "scratch", name: "傷", icon: "〰️", color: "#e34b4b" },
+  { key: "dent", name: "凹み", icon: "◉", color: "#805ad5" },
+];
+const ASSESSMENT_FIELD_TYPES = ["rating", "checkbox", "text", "number"];
 const TENANT_DATA_MIGRATION = "tenant-isolation-v1";
 
 function seedTenantStatuses(db, tenantId) {
@@ -25,6 +43,24 @@ function seedTenantStatuses(db, tenantId) {
   `);
   for (const status of DEFAULT_STATUSES) {
     addStatus.run(tenantId, status.key, status.name, status.icon);
+  }
+}
+
+function seedTenantAssessment(db, tenantId) {
+  const addField = db.prepare(`
+    INSERT OR IGNORE INTO vehicle_assessment_fields
+      (tenant_id, built_in_key, group_key, name, field_type, suffix, display_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const field of DEFAULT_ASSESSMENT_FIELDS) {
+    addField.run(tenantId, field.key, field.group, field.name, field.type, field.suffix || "", field.sort);
+  }
+  const addDamageType = db.prepare(`
+    INSERT OR IGNORE INTO vehicle_damage_types (tenant_id, built_in_key, name, icon, color)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  for (const type of DEFAULT_DAMAGE_TYPES) {
+    addDamageType.run(tenantId, type.key, type.name, type.icon, type.color);
   }
 }
 
@@ -283,6 +319,47 @@ function openDatabase(databasePath) {
     CREATE INDEX IF NOT EXISTS vehicle_statuses_tenant_idx ON vehicle_statuses(tenant_id);
     CREATE INDEX IF NOT EXISTS vehicle_status_assignments_status_idx
       ON vehicle_status_assignments(status_id);
+    CREATE TABLE IF NOT EXISTS vehicle_assessment_fields (
+      id INTEGER PRIMARY KEY,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      built_in_key TEXT,
+      group_key TEXT NOT NULL DEFAULT 'custom',
+      name TEXT NOT NULL,
+      field_type TEXT NOT NULL CHECK(field_type IN ('rating', 'checkbox', 'text', 'number')),
+      suffix TEXT NOT NULL DEFAULT '',
+      display_order INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (tenant_id, built_in_key),
+      UNIQUE (tenant_id, group_key, name COLLATE NOCASE)
+    );
+    CREATE TABLE IF NOT EXISTS vehicle_assessment_values (
+      vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+      field_id INTEGER NOT NULL REFERENCES vehicle_assessment_fields(id) ON DELETE CASCADE,
+      value TEXT NOT NULL,
+      PRIMARY KEY (vehicle_id, field_id)
+    );
+    CREATE TABLE IF NOT EXISTS vehicle_damage_types (
+      id INTEGER PRIMARY KEY,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      built_in_key TEXT,
+      name TEXT NOT NULL,
+      icon TEXT NOT NULL DEFAULT '⚠️',
+      color TEXT NOT NULL DEFAULT '#e34b4b',
+      UNIQUE (tenant_id, built_in_key),
+      UNIQUE (tenant_id, name COLLATE NOCASE)
+    );
+    CREATE TABLE IF NOT EXISTS vehicle_damage_marks (
+      id TEXT PRIMARY KEY,
+      vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+      damage_type_id INTEGER NOT NULL REFERENCES vehicle_damage_types(id) ON DELETE CASCADE,
+      x REAL NOT NULL CHECK(x >= 0 AND x <= 1),
+      y REAL NOT NULL CHECK(y >= 0 AND y <= 1)
+    );
+    CREATE INDEX IF NOT EXISTS vehicle_assessment_fields_tenant_idx
+      ON vehicle_assessment_fields(tenant_id, group_key, display_order);
+    CREATE INDEX IF NOT EXISTS vehicle_assessment_values_field_idx
+      ON vehicle_assessment_values(field_id);
+    CREATE INDEX IF NOT EXISTS vehicle_damage_types_tenant_idx ON vehicle_damage_types(tenant_id);
+    CREATE INDEX IF NOT EXISTS vehicle_damage_marks_vehicle_idx ON vehicle_damage_marks(vehicle_id);
   `);
   const statusMigration = "custom-vehicle-statuses-v1";
   if (!db.prepare("SELECT 1 FROM schema_migrations WHERE name = ?").get(statusMigration)) {
@@ -310,14 +387,31 @@ function openDatabase(databasePath) {
       throw error;
     }
   }
+  const assessmentMigration = "vehicle-assessment-sheet-v1";
+  if (!db.prepare("SELECT 1 FROM schema_migrations WHERE name = ?").get(assessmentMigration)) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const tenant of db.prepare("SELECT id FROM tenants").all()) {
+        seedTenantAssessment(db, tenant.id);
+      }
+      db.prepare("INSERT INTO schema_migrations (name) VALUES (?)").run(assessmentMigration);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      db.close();
+      throw error;
+    }
+  }
   return db;
 }
 
 module.exports = {
+  ASSESSMENT_FIELD_TYPES,
   DEFAULT_STATUSES,
   LOT_NAMES,
   VEHICLE_OPTIONS,
   VEHICLE_TYPES,
   openDatabase,
+  seedTenantAssessment,
   seedTenantStatuses,
 };

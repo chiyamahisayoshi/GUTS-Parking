@@ -67,6 +67,10 @@ test("uses full-width parking cards and compact controls on phone layouts", () =
   assert.match(html, /<details id="status-panel" open>/);
   assert.match(html, /id="manage-statuses-button"/);
   assert.match(html, /id="vehicle-status-options"/);
+  assert.match(html, /車両状態評価シート/);
+  assert.match(html, /車体の損傷位置/);
+  assert.match(html, /id="inspection-car-view"[^>]*3Dイメージ/);
+  assert.match(html, /id="assessment-manager-dialog"/);
   const phoneLayout = stylesheet.slice(stylesheet.indexOf("@media (max-width: 560px)"));
   assert.match(phoneLayout, /\.parking-grid\s*\{\s*display:\s*grid;\s*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
   assert.match(phoneLayout, /\.lot-card\s*\{\s*width:\s*100%;\s*max-width:\s*100%/);
@@ -208,6 +212,93 @@ test("manages tenant-specific vehicle statuses and removes deleted assignments",
   assert.equal(restored.body.unwashed, true);
 });
 
+test("persists editable vehicle assessment fields and damage marks", async () => {
+  const bootstrap = (await agent.get("/api/bootstrap")).body;
+  const fields = bootstrap.assessment_fields;
+  assert.equal(fields.find((field) => field.built_in_key === "exterior").field_type, "rating");
+  assert.equal(fields.find((field) => field.built_in_key === "registration_document").suffix, "確認済み");
+  assert.equal(fields.find((field) => field.built_in_key === "mileage").suffix, "km");
+  const exterior = fields.find((field) => field.built_in_key === "exterior");
+  const documentField = fields.find((field) => field.built_in_key === "registration_document");
+  const mileage = fields.find((field) => field.built_in_key === "mileage");
+  const year = fields.find((field) => field.built_in_key === "registration_year");
+  const month = fields.find((field) => field.built_in_key === "registration_month");
+  const scratch = bootstrap.damage_types.find((type) => type.built_in_key === "scratch");
+  assert.ok(scratch);
+  assert.equal(bootstrap.damage_types.find((type) => type.built_in_key === "dent").name, "凹み");
+
+  const customField = await agent.post("/api/assessment-fields").send({
+    name: "ガラスの状態",
+    field_type: "rating",
+    suffix: "点",
+  });
+  assert.equal(customField.status, 201);
+  const customDamage = await agent.post("/api/damage-types").send({
+    name: "ガラス割れ",
+    icon: "💥",
+    color: "#336699",
+  });
+  assert.equal(customDamage.status, 201);
+  const mark = { id: "scratch-front-left", damage_type_id: scratch.id, x: 0.21, y: 0.42 };
+  const updated = await agent.patch(`/api/vehicles/${vehicleId}`).send({
+    assessment_values: {
+      [exterior.id]: "4",
+      [documentField.id]: true,
+      [mileage.id]: "123456",
+      [year.id]: "2022",
+      [month.id]: "7",
+      [customField.body.id]: "5",
+    },
+    inspection_marks: [mark, {
+      id: "glass-crack",
+      damage_type_id: customDamage.body.id,
+      x: 0.67,
+      y: 0.31,
+    }],
+  });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.assessment_values[exterior.id], "4");
+  assert.equal(updated.body.assessment_values[documentField.id], "true");
+  assert.equal(updated.body.assessment_values[mileage.id], "123456");
+  assert.equal(updated.body.inspection_marks.length, 2);
+  assert.deepEqual(
+    [updated.body.inspection_marks[0].x, updated.body.inspection_marks[0].y],
+    [0.21, 0.42],
+  );
+  const boardVehicle = (await agent.get("/api/bootstrap")).body.vehicles
+    .find((vehicle) => vehicle.id === vehicleId);
+  assert.equal(boardVehicle.assessment_values[year.id], "2022");
+  assert.equal(boardVehicle.inspection_marks[1].name, "ガラス割れ");
+
+  assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
+    assessment_values: { [exterior.id]: "6" },
+  })).status, 422);
+  assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
+    assessment_values: { [month.id]: "13" },
+  })).status, 422);
+  assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
+    inspection_marks: [{ ...mark, x: 1.1 }],
+  })).status, 422);
+  assert.equal((await agent.post("/api/assessment-fields").send({
+    name: "不正形式",
+    field_type: "unknown",
+  })).status, 422);
+  assert.equal((await agent.post("/api/damage-types").send({
+    name: "不正色",
+    color: "red",
+  })).status, 422);
+
+  const unchanged = await agent.patch(`/api/vehicles/${vehicleId}`).send({ plate: "評価保持テスト" });
+  assert.equal(unchanged.body.assessment_values[exterior.id], "4");
+  assert.equal(unchanged.body.inspection_marks.length, 2);
+  assert.equal((await agent.delete(`/api/assessment-fields/${customField.body.id}`)).status, 204);
+  assert.equal((await agent.delete(`/api/damage-types/${customDamage.body.id}`)).status, 204);
+  const afterDelete = (await agent.get("/api/bootstrap")).body.vehicles
+    .find((vehicle) => vehicle.id === vehicleId);
+  assert.equal(Object.hasOwn(afterDelete.assessment_values, customField.body.id), false);
+  assert.equal(afterDelete.inspection_marks.length, 1);
+});
+
 test("operator accounts can use the board but cannot add vehicles or manage locations", async () => {
   application.db.prepare("INSERT INTO users (username, password_hash, role, tenant_id) VALUES (?, ?, ?, 1)").run(
     "staff",
@@ -255,6 +346,15 @@ test("headquarters can create isolated franchise stores and suspend or restore a
   const headquartersOnlyStatus = await agent.post("/api/statuses")
     .send({ name: "本店専用ステータス" });
   assert.equal(headquartersOnlyStatus.status, 201);
+  const headquartersOnlyField = await agent.post("/api/assessment-fields").send({
+    name: "本店専用チェック",
+    field_type: "checkbox",
+  });
+  assert.equal(headquartersOnlyField.status, 201);
+  const headquartersOnlyDamage = await agent.post("/api/damage-types").send({
+    name: "本店専用損傷",
+  });
+  assert.equal(headquartersOnlyDamage.status, 201);
   assert.equal((await agent.post("/api/franchises").send({
     name: "東店",
     username: "east-admin",
@@ -293,6 +393,10 @@ test("headquarters can create isolated franchise stores and suspend or restore a
   assert.equal(franchiseBoard.vehicles.length, 0);
   assert.equal(franchiseBoard.statuses.some((status) =>
     status.id === headquartersOnlyStatus.body.id), false);
+  assert.equal(franchiseBoard.assessment_fields.some((field) =>
+    field.id === headquartersOnlyField.body.id), false);
+  assert.equal(franchiseBoard.damage_types.some((type) =>
+    type.id === headquartersOnlyDamage.body.id), false);
   assert.equal((await agent.patch(`/api/vehicles/${vehicleId}`).send({
     parking_lot_id: franchiseBoard.parking_lots[0].id,
   })).status, 422);
@@ -319,6 +423,17 @@ test("headquarters can create isolated franchise stores and suspend or restore a
   assert.equal(franchiseVehicle.status, 201);
   assert.equal((await franchiseAgent.patch(`/api/vehicles/${franchiseVehicle.body.id}`).send({
     status_ids: [headquartersOnlyStatus.body.id],
+  })).status, 422);
+  assert.equal((await franchiseAgent.patch(`/api/vehicles/${franchiseVehicle.body.id}`).send({
+    assessment_values: { [headquartersOnlyField.body.id]: true },
+  })).status, 422);
+  assert.equal((await franchiseAgent.patch(`/api/vehicles/${franchiseVehicle.body.id}`).send({
+    inspection_marks: [{
+      id: "foreign-tenant-mark",
+      damage_type_id: headquartersOnlyDamage.body.id,
+      x: 0.4,
+      y: 0.6,
+    }],
   })).status, 422);
   const franchiseStatus = await franchiseAgent.post("/api/statuses")
     .send({ name: "東店専用ステータス" });
@@ -378,6 +493,8 @@ test("headquarters can create isolated franchise stores and suspend or restore a
   const [deletionCode] = await deletionSocketClosed;
   assert.equal(deletionCode, 4004);
   assert.equal((await agent.delete(`/api/statuses/${headquartersOnlyStatus.body.id}`)).status, 204);
+  assert.equal((await agent.delete(`/api/assessment-fields/${headquartersOnlyField.body.id}`)).status, 204);
+  assert.equal((await agent.delete(`/api/damage-types/${headquartersOnlyDamage.body.id}`)).status, 204);
   assert.equal((await franchiseAgent.get("/api/bootstrap")).status, 401);
   assert.equal(application.db.prepare("SELECT 1 FROM tenants WHERE id = ?").get(franchise.id), undefined);
   assert.equal(application.db.prepare("SELECT 1 FROM vehicles WHERE tenant_id = ?").get(franchise.id), undefined);
@@ -421,6 +538,23 @@ test("rejects cross-origin changes and broadcasts edits only to authenticated we
   });
   await once(websocket, "open");
   try {
+    const assessmentFieldMessage = once(websocket, "message");
+    const assessmentField = await agent.post("/api/assessment-fields").send({
+      name: "リアルタイム検査項目",
+      field_type: "text",
+    });
+    assert.equal(assessmentField.status, 201);
+    assert.deepEqual(JSON.parse((await assessmentFieldMessage)[0].toString()), { type: "refresh" });
+    const assessmentUpdateMessage = once(websocket, "message");
+    const assessmentFieldValue = await agent.patch(`/api/vehicles/${vehicleId}`).send({
+      assessment_values: { [assessmentField.body.id]: "同期済み" },
+    });
+    assert.equal(assessmentFieldValue.body.assessment_values[assessmentField.body.id], "同期済み");
+    assert.deepEqual(JSON.parse((await assessmentUpdateMessage)[0].toString()), { type: "refresh" });
+    const assessmentDeleteMessage = once(websocket, "message");
+    assert.equal((await agent.delete(`/api/assessment-fields/${assessmentField.body.id}`)).status, 204);
+    assert.deepEqual(JSON.parse((await assessmentDeleteMessage)[0].toString()), { type: "refresh" });
+
     const statusCreatedMessage = once(websocket, "message");
     const statusCreated = await agent.post("/api/statuses")
       .send({ name: "同期確認", icon: "📌" });
