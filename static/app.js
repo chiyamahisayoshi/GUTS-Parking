@@ -621,18 +621,24 @@
     token.style.left = `${8 + vehicle.position_x * 84}%`;
     token.style.top = `${10 + vehicle.position_y * 80}%`;
     token.setAttribute("aria-label", `${vehicle.plate}、${vehicle.vehicle_type}`);
+    const statusIcons = statuses
+      .filter((status) => vehicle.status_ids?.includes(status.id))
+      .map((status) => status.icon);
+    if (statusIcons.length) {
+      const statusNode = document.createElement("span");
+      statusNode.className = "token-statuses";
+      statusNode.textContent = statusIcons.join(" · ");
+      token.append(statusNode);
+    }
     const plate = document.createElement("span");
+    plate.className = "token-plate";
     plate.textContent = vehicle.plate;
     token.append(plate);
-    const badges = [
-      ...statuses.filter((status) => vehicle.status_ids?.includes(status.id)).map((status) => status.icon),
-      ...(vehicle.options || []),
-    ];
-    if (badges.length) {
-      const badgeNode = document.createElement("span");
-      badgeNode.className = "token-badges";
-      badgeNode.textContent = badges.join(" · ");
-      token.append(badgeNode);
+    if (vehicle.options?.length) {
+      const optionsNode = document.createElement("span");
+      optionsNode.className = "token-options";
+      optionsNode.textContent = vehicle.options.join(" · ");
+      token.append(optionsNode);
     }
     token.addEventListener("pointerdown", startDrag);
     token.addEventListener("click", () => {

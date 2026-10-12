@@ -174,6 +174,10 @@ test("uses full-width parking cards and compact controls on phone layouts", () =
   assert.match(script, /addEventListener\("error"/);
   assert.match(script, /addEventListener\("unhandledrejection"/);
   assert.match(script, /reportClientError\("interaction-error"/);
+  const tokenRenderer = script.slice(script.indexOf("function makeToken"), script.indexOf("function startDrag"));
+  assert.ok(tokenRenderer.indexOf('className = "token-statuses"') < tokenRenderer.indexOf('className = "token-plate"'));
+  assert.ok(tokenRenderer.indexOf('className = "token-plate"') < tokenRenderer.indexOf('className = "token-options"'));
+  assert.match(stylesheet, /\.vehicle-token\s*\{[^}]*flex-direction:\s*column/);
   const issueDrag = script.slice(
     script.indexOf("function startInspectionIssueDrag"),
     script.indexOf("function moveInspectionIssueDrag"),
