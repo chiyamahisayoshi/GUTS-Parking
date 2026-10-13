@@ -95,7 +95,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .vehicle-token.drag-ghost { z-index: 20; cursor: grabbing; box-shadow: 0 8px 24px #172b4d44; transform: translate(-50%, -50%) scale(1.08); }
 .token-statuses, .token-options { max-width: 100%; font-size: 8px; font-weight: 600; line-height: 1.25; color: #53657b; }
 .token-plate { max-width: 100%; }
-.vehicle-catalog { position: sticky; top: 90px; background: var(--surface); border: 1px solid var(--border); border-radius: 13px; padding: 14px; max-height: calc(100vh - 110px); display: flex; flex-direction: column; }
+.vehicle-catalog { position: sticky; top: 90px; background: var(--surface); border: 1px solid var(--border); border-radius: 13px; max-height: calc(100vh - 110px); overflow: hidden; }
+#catalog-panel { display: flex; flex-direction: column; max-height: inherit; }
+#catalog-panel:not([open]) .status-toggle-icon { transform: rotate(-90deg); }
+.catalog-panel-content { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 0 14px 14px; }
 .catalog-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .catalog-heading h2 { margin: 0; font-size: 17px; }
 .catalog-heading .muted { white-space: nowrap; }
@@ -267,7 +270,7 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
 
 @media (max-width: 1100px) {
   .board-workspace { grid-template-columns: 1fr; }
-  .vehicle-catalog { position: static; max-height: 440px; }
+  .vehicle-catalog { position: static; max-height: 440px; order: -1; }
   .vehicle-catalog-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 800px) {
