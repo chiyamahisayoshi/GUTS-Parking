@@ -86,11 +86,19 @@
       <div class="board-workspace">
         <section id="parking-grid" class="parking-grid" aria-label="駐車場・貸出場所"></section>
         <aside class="vehicle-catalog" aria-labelledby="catalog-title">
-          <div class="catalog-heading"><h2 id="catalog-title">車両一覧</h2><input type="search" id="catalog-search" class="catalog-search" placeholder="車番で検索" aria-label="車番で検索" autocomplete="off"><span id="catalog-total" class="muted"></span></div>
-          <div id="vehicle-type-filters" class="catalog-filters" role="group" aria-label="車種で絞り込み">
-            <button class="type-filter active" data-vehicle-type="all">All</button>
-          </div>
-          <div id="vehicle-catalog-list" class="vehicle-catalog-list"></div>
+          <details id="catalog-panel" open>
+            <summary class="status-summary">
+              <span><strong id="catalog-title">車両一覧</strong></span>
+              <span class="status-summary-actions"><span id="catalog-total" class="muted"></span><span class="status-toggle-icon" aria-hidden="true">⌄</span></span>
+            </summary>
+            <div class="catalog-panel-content">
+              <div class="catalog-heading"><input type="search" id="catalog-search" class="catalog-search" placeholder="車番で検索" aria-label="車番で検索" autocomplete="off"></div>
+              <div id="vehicle-type-filters" class="catalog-filters" role="group" aria-label="車種で絞り込み">
+                <button class="type-filter active" data-vehicle-type="all">All</button>
+              </div>
+              <div id="vehicle-catalog-list" class="vehicle-catalog-list"></div>
+            </div>
+          </details>
         </aside>
       </section>
     </main>
