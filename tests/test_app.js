@@ -1252,14 +1252,15 @@ test("wires catalog search, token blink and labelled job time inputs", () => {
   const css = fs.readFileSync(path.join(__dirname, "../static/style.css"), "utf8");
   assert.match(html, /id="catalog-search"/);
   assert.match(html, /<details id="catalog-panel" open>/);
-  assert.match(html, /id="board-search"/);
+  assert.doesNotMatch(html, /board-search/);
+  assert.match(html, /<details id="job-panel" open>/);
+  assert.match(css, /#status-panel,\s*#job-panel\s*\{[^}]*background:\s*var\(--surface\)/);
   assert.match(html, /貼り付け用可/);
   assert.match(html, /車番で検索/);
   assert.match(script, /token-blink/);
   assert.match(script, /catalog-search/);
-  assert.match(script, /board-search/);
+  assert.doesNotMatch(script, /board-search/);
   assert.match(css, /@keyframes token-blink/);
-  assert.match(css, /\.board-search-bar/);
   assert.match(css, /@media \(max-width: 1100px\)[\s\S]*?\.vehicle-catalog \{[^}]*order: -1;/);
 });
 
