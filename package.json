@@ -1,6 +1,6 @@
 {
   "name": "guts",
-  "version": "1.8.4",
+  "version": "1.8.5",
   "private": true,
   "description": "A realtime rental vehicle parking board",
   "main": "app/server.js",

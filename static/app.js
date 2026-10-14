@@ -798,8 +798,7 @@
 
   function renderVehicleCatalog(boardVehicles) {
     const catalogInput = document.querySelector("#catalog-search");
-    const boardInput = document.querySelector("#board-search");
-    const query = normalizePlateQuery(catalogInput?.value || boardInput?.value || "");
+    const query = normalizePlateQuery(catalogInput?.value || "");
     const filtered = boardVehicles.filter((vehicle) =>
       (activeVehicleType === "all" || vehicle.vehicle_type === activeVehicleType) &&
       (!query || normalizePlateQuery(vehicle.plate).includes(query)),
@@ -1128,17 +1127,11 @@
   document.querySelector("#manage-jobs-button").addEventListener("click", openJobManager);
   document.querySelector("#close-job-dialog").addEventListener("click", () =>
     document.querySelector("#job-dialog").close());
-  function syncCatalogSearch(sourceInput) {
-    const value = sourceInput.value;
-    const catalogInput = document.querySelector("#catalog-search");
-    const boardInput = document.querySelector("#board-search");
-    if (catalogInput && catalogInput !== sourceInput) catalogInput.value = value;
-    if (boardInput && boardInput !== sourceInput) boardInput.value = value;
+  function syncCatalogSearch() {
     renderVehicleCatalog(vehicles);
   }
 
-  document.querySelector("#catalog-search")?.addEventListener("input", (e) => syncCatalogSearch(e.target));
-  document.querySelector("#board-search")?.addEventListener("input", (e) => syncCatalogSearch(e.target));
+  document.querySelector("#catalog-search")?.addEventListener("input", syncCatalogSearch);
   document.querySelector("#job-plate").addEventListener("input", updateJobSuggestions);
   document.querySelector("#job-time-button").addEventListener("click", () => {
     const picker = document.querySelector("#job-time-picker");
