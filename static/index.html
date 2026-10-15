@@ -43,6 +43,7 @@
         <div><h1>車両配置</h1></div>
         <div class="page-actions">
           <button id="manage-locations-button" class="primary-button">＋ 位置を管理</button>
+          <button id="manage-logistics-button" class="primary-button" hidden>＋ 距離・店舗</button>
           <button id="add-vehicle-button" class="primary-button">＋ 車両を追加</button>
           <button id="manage-franchises-button" class="primary-button" hidden>＋ 加盟店管理</button>
         </div>
@@ -107,6 +108,7 @@
       <label>ナンバー<input name="plate" required maxlength="40" placeholder="例: 品川 500 あ 1234"></label>
       <div class="form-row">
         <label>クラス<select name="vehicle_type" required></select></label>
+        <button id="manage-classes-button" class="quiet-button settings-inline-button" type="button" hidden>クラスと色を管理</button>
         <p class="default-location-note">追加した車両は一番上の位置に登録されます。</p>
       </div>
       <fieldset class="option-fields">
@@ -228,6 +230,43 @@
         <button type="submit" class="primary-button">項目を追加</button>
       </form>
       <p id="option-error" class="error-message" role="alert"></p>
+    </div>
+  </dialog>
+  <dialog id="class-dialog">
+    <div class="status-form">
+      <div class="dialog-heading">
+        <div><h2>クラスと色を管理</h2></div>
+        <button type="button" id="close-class-dialog" class="close-button" aria-label="閉じる">×</button>
+      </div>
+      <div id="class-manager-list" class="status-manager-list"></div>
+      <form id="add-class-form" class="add-class-form">
+        <label>新しいクラス名<input name="name" required maxlength="40" placeholder="例：E-1"></label>
+        <label>色<input name="color" type="color" value="#4f86f7" aria-label="クラスの色"></label>
+        <button type="submit" class="primary-button">クラスを追加</button>
+      </form>
+      <p id="class-error" class="error-message" role="alert"></p>
+    </div>
+  </dialog>
+  <dialog id="logistics-dialog">
+    <div class="logistics-form">
+      <div class="dialog-heading">
+        <div><h2>距離・店舗を管理</h2></div>
+        <button type="button" id="close-logistics-dialog" class="close-button" aria-label="閉じる">×</button>
+      </div>
+      <h3>店舗</h3>
+      <div id="store-list" class="status-manager-list"></div>
+      <form id="add-store-form" class="add-status-form">
+        <label>新しい店舗名<input name="name" required maxlength="40" placeholder="例：駅前店"></label>
+        <button type="submit" class="primary-button">店舗を追加</button>
+      </form>
+      <h3>店舗から各駐車場までの所要時間（分）</h3>
+      <div id="store-distance-table" class="distance-table-wrap"></div>
+      <button type="button" id="save-store-distances" class="primary-button">店舗距離を保存</button>
+      <h3>駐車場間の所要時間（分）</h3>
+      <p class="hint">上三角のみ入力します。往復で同じ時間として保存されます。</p>
+      <div id="lot-distance-table" class="distance-table-wrap"></div>
+      <button type="button" id="save-lot-distances" class="primary-button">駐車場間距離を保存</button>
+      <p id="logistics-error" class="error-message" role="alert"></p>
     </div>
   </dialog>
   <dialog id="location-dialog">

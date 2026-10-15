@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans JP", sans-serif;
   color: #172b4d;
   background: #f2f5f8;
@@ -80,16 +80,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .lot-area:before { content: ""; position: absolute; inset: 9px; border: 1px dashed #d8e1e6; border-radius: 8px; pointer-events: none; }
 .lot-area.empty:after { content: "車両をここへ移動"; position: absolute; inset: 0; display: grid; place-items: center; color: #aab5c2; font-size: 11px; pointer-events: none; }
 .vehicle-token { position: absolute; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 64px; max-width: 150px; min-height: 38px; padding: 6px 9px; border-radius: 12px; background: #e1f5ec; border: 1px solid #b7e5d0; color: #236b4e; font-weight: 750; font-size: 10px; white-space: normal; overflow-wrap: anywhere; text-align: center; box-shadow: 0 2px 5px #1c39421a; transform: translate(-50%, -50%); touch-action: none; user-select: none; cursor: grab; }
-.type-color-1 { background: #e8efff; border-color: #cad8fb; color: #335dac; }
-.type-color-2 { background: #f2eafe; border-color: #dfccfb; color: #734aa9; }
-.type-color-3 { background: #fff0de; border-color: #f8dab3; color: #9b6427; }
-.type-color-4 { background: #e4f3fa; border-color: #c6e5f1; color: #236783; }
-.type-color-5 { background: #fff0f1; border-color: #f6d0d3; color: #a34452; }
-.type-color-6 { background: #f4f0df; border-color: #e7ddae; color: #786822; }
-.type-color-7 { background: #edf1f3; border-color: #d6e0e4; color: #52636a; }
-.type-color-8 { background: #e9f2df; border-color: #d1e4b8; color: #527536; }
-.type-color-9 { background: #f6e9df; border-color: #ebd1bc; color: #8e5533; }
-.type-color-10 { background: #e7eaf7; border-color: #cbd1eb; color: #48548a; }
+.class-colored { --class-color: #9aa5b1; background: color-mix(in srgb, var(--class-color) 18%, white); border-color: color-mix(in srgb, var(--class-color) 55%, white); color: color-mix(in srgb, var(--class-color) 55%, black); }
 .vehicle-token.drag-ghost { z-index: 20; cursor: grabbing; box-shadow: 0 8px 24px #172b4d44; transform: translate(-50%, -50%) scale(1.08); }
 .token-statuses, .token-options { max-width: 100%; font-size: 8px; font-weight: 600; line-height: 1.25; color: #53657b; }
 .token-plate { max-width: 100%; }
@@ -363,3 +354,20 @@ dialog::backdrop { background: #14283d77; backdrop-filter: blur(2px); }
 .dialog-heading .close-button { padding: 0 6px; line-height: 1; }
 
 dialog > :is(form, div):first-child { padding-top: 0; }
+.class-colored .token-statuses, .class-colored .token-options { color: inherit; }
+.location-item { display: grid; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.location-extra { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; }
+.location-extra input[type=number] { width: 90px; }
+.priority-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.priority-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border: 1px solid; border-radius: 999px; font-size: 11px; }
+.priority-chip button { border: 0; background: transparent; cursor: pointer; padding: 0 2px; color: inherit; }
+.inactive-lot { opacity: .55; }
+.lot-count.over-capacity { color: #c0392b; font-weight: 800; }
+.class-manager-row input[type=text] { flex: 1; min-width: 0; }
+.add-class-form { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin-top: 14px; }
+.logistics-form { padding: 24px; width: min(100%, 900px); }
+#logistics-dialog { width: min(96vw, 940px); }
+.distance-table-wrap { overflow: auto; max-height: 46vh; margin: 8px 0 12px; border: 1px solid var(--border); border-radius: 9px; }
+.distance-table { border-collapse: collapse; font-size: 11px; }
+.distance-table th, .distance-table td { padding: 3px 5px; border: 1px solid var(--border); white-space: nowrap; }
+.distance-table input { width: 54px; }
