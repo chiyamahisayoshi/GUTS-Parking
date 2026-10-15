@@ -127,7 +127,7 @@
     canManageFranchises = userCanManageFranchises;
     document.querySelector("#current-user").textContent = `${tenantName} · ${username}`;
     document.querySelector("#manage-locations-button").hidden = !canManage;
-    document.querySelector("#manage-logistics-button").hidden = !canManage;
+    document.querySelector("#admin-panel-button").hidden = !canManage;
     document.querySelector("#add-vehicle-button").hidden = !canManage;
     document.querySelector("#manage-franchises-button").hidden = !canManageFranchises;
     connectSocket();
@@ -1932,7 +1932,11 @@
       tr.append(th);
       lots.forEach((to, j) => {
         const cell = tr.insertCell();
-        if (j <= i) return;
+        if (j <= i) {
+          cell.className = "distance-blank";
+          cell.textContent = j === i ? "—" : "";
+          return;
+        }
         const entry = lotDistances.find((d) =>
           (d.from_lot_id === from.id && d.to_lot_id === to.id)
           || (d.from_lot_id === to.id && d.to_lot_id === from.id));
@@ -1958,6 +1962,7 @@
 
   function openLogisticsManager() {
     logisticsError.textContent = "";
+    logisticsDialog.querySelector('.tab-button[data-tab="stores"]').click();
     renderLogistics();
     logisticsDialog.showModal();
   }
@@ -2065,10 +2070,20 @@
   });
   document.querySelector("#add-vehicle-button").addEventListener("click", () => openVehicle());
   document.querySelector("#manage-locations-button").addEventListener("click", openLocationManager);
+  document.querySelector("#admin-panel-button").addEventListener("click", () =>
+    document.querySelector("#admin-dialog").showModal());
+  document.querySelector("#close-admin-dialog").addEventListener("click", () =>
+    document.querySelector("#admin-dialog").close());
   document.querySelector("#manage-logistics-button").addEventListener("click", openLogisticsManager);
   document.querySelector("#manage-classes-button").addEventListener("click", openClassManager);
   document.querySelector("#close-class-dialog").addEventListener("click", () => classDialog.close());
   document.querySelector("#close-logistics-dialog").addEventListener("click", () => logisticsDialog.close());
+  logisticsDialog.querySelectorAll(".tab-button").forEach((button) => button.addEventListener("click", () => {
+    logisticsDialog.querySelectorAll(".tab-button").forEach((item) => item.classList.toggle("active", item === button));
+    logisticsDialog.querySelectorAll("[data-tab-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.tabPanel !== button.dataset.tab;
+    });
+  }));
   document.querySelector("#add-class-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     classError.textContent = "";

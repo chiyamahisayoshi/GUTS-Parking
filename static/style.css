@@ -371,3 +371,58 @@ dialog > :is(form, div):first-child { padding-top: 0; }
 .distance-table { border-collapse: collapse; font-size: 11px; }
 .distance-table th, .distance-table td { padding: 3px 5px; border: 1px solid var(--border); white-space: nowrap; }
 .distance-table input { width: 54px; }
+
+/* Admin panel */
+.admin-panel-button { border-color: #b9dfe3; color: var(--teal-dark); font-weight: 650; }
+#admin-dialog { width: min(calc(100% - 28px), 640px); }
+.admin-panel { padding: 0 24px 24px; }
+.admin-panel .muted { margin: 0 0 6px; font-size: 12px; }
+.admin-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+.admin-card { display: grid; gap: 4px; text-align: left; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: #fff; color: var(--ink); cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.admin-card:hover { border-color: var(--teal); box-shadow: 0 4px 14px #087e8b1f; }
+.admin-card b { font-size: 14px; }
+.admin-card span { font-size: 11px; color: #6b7a8c; line-height: 1.45; }
+.admin-card[hidden] { display: none; }
+
+/* Location manager */
+#location-dialog { width: min(calc(100% - 28px), 760px); }
+.location-form { width: 100%; }
+.location-list { max-height: 58vh; gap: 12px; padding: 4px 2px; }
+.location-item { gap: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
+.location-row { grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
+.location-row > input[type=url] { grid-column: 1 / -1; grid-row: 2; }
+.location-row .primary-button, .location-row .danger-button { padding: 9px 14px; font-size: 12px; }
+.location-extra { display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 8px 18px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.location-extra label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #53657b; font-weight: 600; }
+.location-extra input[type=number] { width: 96px; border: 1px solid #d9e2e9; border-radius: 8px; padding: 7px 9px; }
+.location-extra input[type=checkbox] { width: 16px; height: 16px; }
+.priority-editor { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; background: #f6f9fb; border-radius: 10px; }
+.priority-title { flex-basis: 100%; font-size: 11px; font-weight: 700; color: #6b7a8c; }
+.priority-editor select { border: 1px solid #d9e2e9; border-radius: 999px; padding: 4px 8px; font-size: 11px; background: #fff; }
+.add-location-form { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+
+/* Logistics dialog */
+#logistics-dialog { width: min(calc(100% - 28px), 900px); }
+.logistics-form { padding: 0 24px 24px; }
+.tab-bar { display: flex; gap: 6px; margin: 14px 0; padding: 4px; background: #eef3f6; border-radius: 11px; }
+.tab-button { flex: 1; border: 0; background: transparent; padding: 9px 10px; border-radius: 8px; font-size: 13px; color: #53657b; font-weight: 600; cursor: pointer; }
+.tab-button.active { background: #fff; color: var(--teal-dark); box-shadow: 0 1px 4px #1c394224; }
+.tab-panel[hidden] { display: none; }
+.tab-panel .hint { margin: 0 0 10px; font-size: 12px; color: #6b7a8c; }
+.tab-footer { display: flex; justify-content: flex-end; margin-top: 12px; }
+.distance-table-wrap { overflow: auto; max-height: 52vh; margin: 0; border: 1px solid var(--border); border-radius: 10px; }
+.distance-table { border-collapse: separate; border-spacing: 0; font-size: 12px; min-width: 100%; }
+.distance-table th, .distance-table td { padding: 4px 6px; border-right: 1px solid #edf1f4; border-bottom: 1px solid #edf1f4; white-space: nowrap; text-align: center; background: #fff; }
+.distance-table thead th { position: sticky; top: 0; z-index: 2; background: #f3f7f9; color: #53657b; }
+.distance-table tbody th { position: sticky; left: 0; z-index: 1; background: #f3f7f9; text-align: left; color: #34475d; }
+.distance-table thead th:first-child { left: 0; z-index: 3; }
+.distance-table input { width: 58px; border: 1px solid #d9e2e9; border-radius: 6px; padding: 5px 6px; text-align: right; }
+.distance-table .distance-blank { background: #f6f8fa; color: #b4bec9; }
+.add-class-form input[type=color] { width: 48px; height: 38px; padding: 2px; }
+
+@media (max-width: 640px) {
+  .admin-grid { grid-template-columns: 1fr; }
+  .admin-panel, .logistics-form { padding: 0 16px 18px; }
+  .location-extra { grid-template-columns: 1fr 1fr; }
+  .tab-button { font-size: 11px; padding: 8px 4px; }
+}

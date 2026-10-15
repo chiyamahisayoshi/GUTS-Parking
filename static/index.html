@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8">
@@ -35,6 +35,7 @@
         <select class="language-select" aria-label="Language"><option value="ja">日本語</option><option value="zh">中文</option><option value="en">English</option></select>
         <span id="connection-state" class="connection"><i></i>接続中</span>
         <span id="current-user" class="current-user"></span>
+        <button id="admin-panel-button" class="quiet-button admin-panel-button" type="button" hidden>⚙ 管理パネル</button>
         <button id="logout-button" class="quiet-button">ログアウト</button>
       </div>
     </header>
@@ -43,9 +44,7 @@
         <div><h1>車両配置</h1></div>
         <div class="page-actions">
           <button id="manage-locations-button" class="primary-button">＋ 位置を管理</button>
-          <button id="manage-logistics-button" class="primary-button" hidden>＋ 距離・店舗</button>
           <button id="add-vehicle-button" class="primary-button">＋ 車両を追加</button>
-          <button id="manage-franchises-button" class="primary-button" hidden>＋ 加盟店管理</button>
         </div>
       </section>
       <section class="summary-row" aria-label="車両の概要">
@@ -101,6 +100,22 @@
       </section>
     </main>
   </div>
+  <dialog id="admin-dialog">
+    <div class="admin-panel">
+      <div class="dialog-heading">
+        <div><h2>管理パネル</h2><p class="muted">管理者のみ表示されます。設定したい項目を選んでください。</p></div>
+        <button type="button" id="close-admin-dialog" class="close-button" aria-label="閉じる">×</button>
+      </div>
+      <div class="admin-grid">
+        <button id="manage-classes-button" class="admin-card" type="button"><b>クラスと色</b><span>車両クラスの追加・名前・アイコン色</span></button>
+        <button id="manage-logistics-button" class="admin-card" type="button"><b>店舗・距離</b><span>店舗と駐車場までの所要時間</span></button>
+        <button id="manage-options-button" class="admin-card" type="button"><b>車両オプション</b><span>ETC・禁煙などの追加・削除</span></button>
+        <button id="manage-vehicle-statuses-button" class="admin-card" type="button"><b>対応ステータス</b><span>洗車待ち・給油待ちなどの管理</span></button>
+        <button id="manage-assessment-button" class="admin-card" type="button"><b>評価項目・損傷種類</b><span>車両状態評価シートの設定</span></button>
+        <button id="manage-franchises-button" class="admin-card" type="button" hidden><b>加盟店・アカウント</b><span>加盟店と管理者アカウントの作成</span></button>
+      </div>
+    </div>
+  </dialog>
   <dialog id="vehicle-dialog" class="vehicle-dialog">
     <form id="vehicle-form" class="vehicle-form">
       <div class="dialog-heading"><div><h2 id="dialog-title">車両を追加</h2></div><div class="heading-actions"><button type="button" id="cancel-dialog" class="quiet-button">キャンセル</button><button type="submit" class="primary-button">保存</button><button type="button" id="close-dialog" class="close-button" aria-label="閉じる">×</button></div></div>
@@ -108,23 +123,19 @@
       <label>ナンバー<input name="plate" required maxlength="40" placeholder="例: 品川 500 あ 1234"></label>
       <div class="form-row">
         <label>クラス<select name="vehicle_type" required></select></label>
-        <button id="manage-classes-button" class="quiet-button settings-inline-button" type="button" hidden>クラスと色を管理</button>
         <p class="default-location-note">追加した車両は一番上の位置に登録されます。</p>
       </div>
       <fieldset class="option-fields">
         <legend>オプション</legend>
-        <button id="manage-options-button" class="quiet-button settings-inline-button" type="button" hidden>オプションを追加・削除</button>
         <div id="vehicle-option-choices" class="status-option-list"></div>
       </fieldset>
       <fieldset class="status-fields">
         <legend>対応ステータス</legend>
-        <button id="manage-vehicle-statuses-button" class="quiet-button settings-inline-button" type="button" hidden>ステータスを追加・削除</button>
         <div id="vehicle-status-options" class="status-option-list"></div>
       </fieldset>
       <section class="assessment-section">
         <div class="assessment-section-heading">
           <div><h3>車両状態評価シート</h3></div>
-          <button id="manage-assessment-button" class="quiet-button" type="button" hidden>評価項目・損傷種類を管理</button>
         </div>
         <div id="assessment-fields"></div>
         <label class="assessment-notes-field">備考欄<textarea name="notes" rows="4" maxlength="5000" placeholder="車両について共有したいことを記録できます。"></textarea></label>
@@ -250,22 +261,31 @@
   <dialog id="logistics-dialog">
     <div class="logistics-form">
       <div class="dialog-heading">
-        <div><h2>距離・店舗を管理</h2></div>
+        <div><h2>店舗・距離</h2></div>
         <button type="button" id="close-logistics-dialog" class="close-button" aria-label="閉じる">×</button>
       </div>
-      <h3>店舗</h3>
-      <div id="store-list" class="status-manager-list"></div>
-      <form id="add-store-form" class="add-status-form">
-        <label>新しい店舗名<input name="name" required maxlength="40" placeholder="例：駅前店"></label>
-        <button type="submit" class="primary-button">店舗を追加</button>
-      </form>
-      <h3>店舗から各駐車場までの所要時間（分）</h3>
-      <div id="store-distance-table" class="distance-table-wrap"></div>
-      <button type="button" id="save-store-distances" class="primary-button">店舗距離を保存</button>
-      <h3>駐車場間の所要時間（分）</h3>
-      <p class="hint">上三角のみ入力します。往復で同じ時間として保存されます。</p>
-      <div id="lot-distance-table" class="distance-table-wrap"></div>
-      <button type="button" id="save-lot-distances" class="primary-button">駐車場間距離を保存</button>
+      <div class="tab-bar" role="tablist">
+        <button type="button" class="tab-button active" data-tab="stores" role="tab">店舗</button>
+        <button type="button" class="tab-button" data-tab="store-distances" role="tab">店舗 → 駐車場</button>
+        <button type="button" class="tab-button" data-tab="lot-distances" role="tab">駐車場 ↔ 駐車場</button>
+      </div>
+      <section class="tab-panel" data-tab-panel="stores">
+        <div id="store-list" class="status-manager-list"></div>
+        <form id="add-store-form" class="add-status-form">
+          <label>新しい店舗名<input name="name" required maxlength="40" placeholder="例：駅前店"></label>
+          <button type="submit" class="primary-button">店舗を追加</button>
+        </form>
+      </section>
+      <section class="tab-panel" data-tab-panel="store-distances" hidden>
+        <p class="hint">各店舗から駐車場までの所要時間（分）。空欄は未設定です。</p>
+        <div id="store-distance-table" class="distance-table-wrap"></div>
+        <div class="tab-footer"><button type="button" id="save-store-distances" class="primary-button">保存</button></div>
+      </section>
+      <section class="tab-panel" data-tab-panel="lot-distances" hidden>
+        <p class="hint">駐車場どうしの所要時間（分）。片方を入力すると往復で同じ時間になります。</p>
+        <div id="lot-distance-table" class="distance-table-wrap"></div>
+        <div class="tab-footer"><button type="button" id="save-lot-distances" class="primary-button">保存</button></div>
+      </section>
       <p id="logistics-error" class="error-message" role="alert"></p>
     </div>
   </dialog>
