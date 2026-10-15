@@ -1,4 +1,4 @@
-﻿const http = require("node:http");
+const http = require("node:http");
 const path = require("node:path");
 require("dotenv").config({ path: path.resolve(__dirname, "..", ".env") });
 const express = require("express");
@@ -14,10 +14,10 @@ const {
   ASSESSMENT_FIELD_TYPES,
   DEFAULT_STATUSES,
   LOT_NAMES,
-  VEHICLE_TYPES,
   openDatabase,
   seedTenantAssessment,
   seedTenantStatuses,
+  seedTenantVehicleClasses,
   seedTenantVehicleOptions,
 } = require("./db");
 const { SQLiteSessionStore } = require("./session-store");
@@ -158,12 +158,32 @@ class RealtimeBoard {
   }
 }
 
+const LOT_COLUMNS = `id, name, display_order, area_height, area_width, navigation_url, markings,
+  capacity, is_active, class_priority`;
+
 function parkingLotFromRow(row) {
+  const lot = { ...row, is_active: row.is_active !== 0 };
   try {
-    return { ...row, markings: JSON.parse(row.markings || "[]") };
+    lot.markings = JSON.parse(row.markings || "[]");
   } catch {
-    return { ...row, markings: [] };
+    lot.markings = [];
   }
+  try {
+    const priority = JSON.parse(row.class_priority || "[]");
+    lot.class_priority = Array.isArray(priority) ? priority : [];
+  } catch {
+    lot.class_priority = [];
+  }
+  return lot;
+}
+
+function isHexColor(value) {
+  return typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value);
+}
+
+function parseDistanceValue(value, { max }) {
+  if (value === null || value === undefined || value === "") return null;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= max ? value : undefined;
 }
 
 function validateMarkings(markings) {
@@ -530,6 +550,11 @@ function createApplication(options = {}) {
       Boolean(db.prepare("SELECT 1 FROM parking_lots WHERE id = ? AND tenant_id = ?").get(lotId, tenantId));
   }
 
+  function classExists(name, tenantId) {
+    return typeof name === "string" &&
+      Boolean(db.prepare("SELECT 1 FROM vehicle_classes WHERE tenant_id = ? AND name = ?").get(tenantId, name));
+  }
+
   app.use("/static", express.static(STATIC_DIR));
   app.use("/vendor", express.static(THREE_BUILD_DIR, { maxAge: "1d" }));
   app.use(express.static(STATIC_DIR));
@@ -615,8 +640,7 @@ function createApplication(options = {}) {
 
   app.get("/api/bootstrap", requireUser, (request, response) => {
     const parkingLots = db.prepare(
-      `SELECT id, name, display_order, area_height, area_width, navigation_url, markings
-       FROM parking_lots WHERE tenant_id = ? ORDER BY display_order, id`,
+      `SELECT ${LOT_COLUMNS} FROM parking_lots WHERE tenant_id = ? ORDER BY display_order, id`,
     ).all(request.tenantId).map(parkingLotFromRow);
     const vehicleRows = db.prepare(`
       SELECT id, external_id, plate, vehicle_type, parking_lot_id,
@@ -687,6 +711,16 @@ function createApplication(options = {}) {
       FROM jobs WHERE tenant_id = ?
       ORDER BY completed, scheduled_at, id
     `).all(request.tenantId);
+    const vehicleClasses = db.prepare(
+      "SELECT id, name, color, display_order FROM vehicle_classes WHERE tenant_id = ? ORDER BY display_order, id",
+    ).all(request.tenantId);
+    const stores = db.prepare("SELECT id, name FROM stores WHERE tenant_id = ? ORDER BY id").all(request.tenantId);
+    const lotDistances = db.prepare(
+      "SELECT from_lot_id, to_lot_id, minutes, km FROM lot_distances WHERE tenant_id = ? ORDER BY from_lot_id, to_lot_id",
+    ).all(request.tenantId);
+    const storeLotDistances = db.prepare(
+      "SELECT store_id, lot_id, minutes, km FROM store_lot_distances WHERE tenant_id = ? ORDER BY store_id, lot_id",
+    ).all(request.tenantId);
     response.json({
       parking_lots: parkingLots,
       vehicles,
@@ -694,9 +728,227 @@ function createApplication(options = {}) {
       statuses,
       assessment_fields: assessmentFields,
       damage_types: damageTypes,
-      vehicle_types: VEHICLE_TYPES,
+      vehicle_types: vehicleClasses.map((item) => item.name),
+      vehicle_classes: vehicleClasses,
+      stores,
+      lot_distances: lotDistances,
+      store_lot_distances: storeLotDistances,
       vehicle_options: vehicleOptions,
     });
+  });
+
+  function parseClassBody(body, { partial }) {
+    const name = typeof body?.name === "string" ? body.name.trim() : body?.name;
+    if (name !== undefined || !partial) {
+      if (typeof name !== "string" || !name || name.length > 40) {
+        return { error: "クラス名は1〜40文字で入力してください。" };
+      }
+    }
+    if (body?.color !== undefined || !partial) {
+      if (!isHexColor(body?.color)) return { error: "色は #RRGGBB 形式で指定してください。" };
+    }
+    return { name, color: body?.color };
+  }
+
+  app.post("/api/vehicle-classes", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const parsed = parseClassBody(request.body, { partial: false });
+    if (parsed.error) return response.status(422).json({ detail: parsed.error });
+    try {
+      const result = db.prepare(`
+        INSERT INTO vehicle_classes (tenant_id, name, color, display_order)
+        VALUES (?, ?, ?, (SELECT COALESCE(MAX(display_order), -1) + 1 FROM vehicle_classes WHERE tenant_id = ?))
+      `).run(request.tenantId, parsed.name, parsed.color, request.tenantId);
+      realtime.notify(request.tenantId);
+      response.status(201).json(db.prepare(
+        "SELECT id, name, color, display_order FROM vehicle_classes WHERE id = ?",
+      ).get(result.lastInsertRowid));
+    } catch (error) {
+      if (isUniqueConstraint(error)) return response.status(409).json({ detail: "同じ名前のクラスが既にあります。" });
+      next(error);
+    }
+  });
+
+  app.patch("/api/vehicle-classes/:id", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const classId = parseVehicleId(request.params.id);
+    const current = classId === null ? null : db.prepare(
+      "SELECT id, name, color FROM vehicle_classes WHERE id = ? AND tenant_id = ?",
+    ).get(classId, request.tenantId);
+    if (!current) return response.status(404).json({ detail: "Vehicle class not found." });
+    const parsed = parseClassBody(request.body, { partial: true });
+    if (parsed.error) return response.status(422).json({ detail: parsed.error });
+    const name = parsed.name ?? current.name;
+    const color = parsed.color ?? current.color;
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.prepare("UPDATE vehicle_classes SET name = ?, color = ? WHERE id = ?").run(name, color, classId);
+        if (name !== current.name) {
+          db.prepare("UPDATE vehicles SET vehicle_type = ? WHERE tenant_id = ? AND vehicle_type = ?")
+            .run(name, request.tenantId, current.name);
+          const lots = db.prepare("SELECT id, class_priority FROM parking_lots WHERE tenant_id = ?")
+            .all(request.tenantId);
+          for (const lot of lots) {
+            const priority = parkingLotFromRow({ ...lot, markings: "[]" }).class_priority;
+            if (priority.includes(current.name)) {
+              db.prepare("UPDATE parking_lots SET class_priority = ? WHERE id = ?")
+                .run(JSON.stringify(priority.map((item) => (item === current.name ? name : item))), lot.id);
+            }
+          }
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      realtime.notify(request.tenantId);
+      response.json({ id: classId, name, color });
+    } catch (error) {
+      if (isUniqueConstraint(error)) return response.status(409).json({ detail: "同じ名前のクラスが既にあります。" });
+      next(error);
+    }
+  });
+
+  app.delete("/api/vehicle-classes/:id", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const classId = parseVehicleId(request.params.id);
+    const current = classId === null ? null : db.prepare(
+      "SELECT id, name FROM vehicle_classes WHERE id = ? AND tenant_id = ?",
+    ).get(classId, request.tenantId);
+    if (!current) return response.status(404).json({ detail: "Vehicle class not found." });
+    try {
+      if (db.prepare("SELECT 1 FROM vehicles WHERE tenant_id = ? AND vehicle_type = ? LIMIT 1")
+        .get(request.tenantId, current.name)) {
+        return response.status(409).json({ detail: "このクラスの車両が登録されているため削除できません。" });
+      }
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.prepare("DELETE FROM vehicle_classes WHERE id = ?").run(classId);
+        for (const lot of db.prepare("SELECT id, class_priority FROM parking_lots WHERE tenant_id = ?")
+          .all(request.tenantId)) {
+          const priority = parkingLotFromRow({ ...lot, markings: "[]" }).class_priority;
+          if (priority.includes(current.name)) {
+            db.prepare("UPDATE parking_lots SET class_priority = ? WHERE id = ?")
+              .run(JSON.stringify(priority.filter((item) => item !== current.name)), lot.id);
+          }
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      realtime.notify(request.tenantId);
+      response.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/stores", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
+    if (!name || name.length > 40) {
+      return response.status(422).json({ detail: "店舗名は1〜40文字で入力してください。" });
+    }
+    try {
+      const result = db.prepare("INSERT INTO stores (tenant_id, name) VALUES (?, ?)")
+        .run(request.tenantId, name);
+      realtime.notify(request.tenantId);
+      response.status(201).json({ id: Number(result.lastInsertRowid), name });
+    } catch (error) {
+      if (isUniqueConstraint(error)) return response.status(409).json({ detail: "同じ名前の店舗が既にあります。" });
+      next(error);
+    }
+  });
+
+  app.delete("/api/stores/:id", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const storeId = parseVehicleId(request.params.id);
+    try {
+      const result = storeId === null ? { changes: 0 } :
+        db.prepare("DELETE FROM stores WHERE id = ? AND tenant_id = ?").run(storeId, request.tenantId);
+      if (!result.changes) return response.status(404).json({ detail: "Store not found." });
+      realtime.notify(request.tenantId);
+      response.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  function parseDistanceEntries(entries, fields) {
+    if (!Array.isArray(entries) || entries.length > 2000) return null;
+    const parsed = [];
+    for (const entry of entries) {
+      if (!entry || typeof entry !== "object") return null;
+      const ids = fields.map((field) => entry[field]);
+      if (ids.some((id) => !Number.isInteger(id))) return null;
+      const minutes = parseDistanceValue(entry.minutes, { max: 100000 });
+      const km = parseDistanceValue(entry.km, { max: 100000 });
+      if (minutes === undefined || km === undefined) return null;
+      parsed.push({ ids, minutes, km });
+    }
+    return parsed;
+  }
+
+  app.put("/api/lot-distances", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const entries = parseDistanceEntries(request.body?.entries, ["from_lot_id", "to_lot_id"]);
+    if (!entries) return response.status(422).json({ detail: "距離データの形式が正しくありません。" });
+    if (entries.some(({ ids }) => ids[0] === ids[1] ||
+        !validateLot(ids[0], request.tenantId) || !validateLot(ids[1], request.tenantId))) {
+      return response.status(422).json({ detail: "停車場の指定が正しくありません。" });
+    }
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        for (const { ids, minutes, km } of entries) {
+          if (minutes === null) {
+            db.prepare("DELETE FROM lot_distances WHERE from_lot_id = ? AND to_lot_id = ?").run(ids[0], ids[1]);
+          } else {
+            db.prepare(`
+              INSERT INTO lot_distances (tenant_id, from_lot_id, to_lot_id, minutes, km) VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(from_lot_id, to_lot_id) DO UPDATE SET minutes = excluded.minutes, km = excluded.km
+            `).run(request.tenantId, ids[0], ids[1], minutes, km);
+          }
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      realtime.notify(request.tenantId);
+      response.json({ updated: entries.length });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.put("/api/store-distances", requireUser, requireAdmin, requireSameOrigin, (request, response, next) => {
+    const entries = parseDistanceEntries(request.body?.entries, ["store_id", "lot_id"]);
+    if (!entries) return response.status(422).json({ detail: "距離データの形式が正しくありません。" });
+    const storeExists = db.prepare("SELECT 1 FROM stores WHERE id = ? AND tenant_id = ?");
+    if (entries.some(({ ids }) => !storeExists.get(ids[0], request.tenantId) ||
+        !validateLot(ids[1], request.tenantId))) {
+      return response.status(422).json({ detail: "店舗または停車場の指定が正しくありません。" });
+    }
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        for (const { ids, minutes, km } of entries) {
+          if (minutes === null) {
+            db.prepare("DELETE FROM store_lot_distances WHERE store_id = ? AND lot_id = ?").run(ids[0], ids[1]);
+          } else {
+            db.prepare(`
+              INSERT INTO store_lot_distances (tenant_id, store_id, lot_id, minutes, km) VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(store_id, lot_id) DO UPDATE SET minutes = excluded.minutes, km = excluded.km
+            `).run(request.tenantId, ids[0], ids[1], minutes, km);
+          }
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      realtime.notify(request.tenantId);
+      response.json({ updated: entries.length });
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.get("/api/franchises", requireUser, requireHeadquartersAdmin, (_request, response) => {
@@ -742,6 +994,7 @@ function createApplication(options = {}) {
         seedTenantStatuses(db, tenantId);
         seedTenantAssessment(db, tenantId);
         seedTenantVehicleOptions(db, tenantId);
+        seedTenantVehicleClasses(db, tenantId);
         db.prepare(`
           INSERT INTO users (username, password_hash, role, tenant_id)
           VALUES (?, ?, 'admin', ?)
@@ -862,8 +1115,7 @@ function createApplication(options = {}) {
       `).run(request.tenantId, name, request.tenantId, navigationUrl);
       realtime.notify(request.tenantId);
       response.status(201).json(parkingLotFromRow(db.prepare(
-        `SELECT id, name, display_order, area_height, area_width, navigation_url, markings
-         FROM parking_lots WHERE id = ? AND tenant_id = ?`,
+        `SELECT ${LOT_COLUMNS} FROM parking_lots WHERE id = ? AND tenant_id = ?`,
       ).get(result.lastInsertRowid, request.tenantId)));
     } catch (error) {
       if (isUniqueConstraint(error)) {
@@ -883,8 +1135,9 @@ function createApplication(options = {}) {
       const body = request.body || {};
       const entries = Object.entries(body);
       if (!entries.length || entries.some(([key]) =>
-        !["name", "navigation_url", "area_height", "area_width", "markings"].includes(key))) {
-        return response.status(422).json({ detail: "Only parking location name, navigation link, size, and markings can be changed." });
+        !["name", "navigation_url", "area_height", "area_width", "markings",
+          "capacity", "is_active", "class_priority"].includes(key))) {
+        return response.status(422).json({ detail: "Unsupported parking location field." });
       }
       const {
         name: rawName,
@@ -892,7 +1145,23 @@ function createApplication(options = {}) {
         area_height: height,
         area_width: width,
         markings,
+        capacity,
+        is_active: isActive,
+        class_priority: classPriority,
       } = body;
+      if (capacity !== undefined && capacity !== null &&
+          (!Number.isInteger(capacity) || capacity < 0 || capacity > 1000)) {
+        return response.status(422).json({ detail: "収容台数は0〜1000の整数で指定してください。" });
+      }
+      if (isActive !== undefined && typeof isActive !== "boolean") {
+        return response.status(422).json({ detail: "is_active must be true or false." });
+      }
+      if (classPriority !== undefined &&
+          (!Array.isArray(classPriority) || classPriority.length > 100 ||
+           new Set(classPriority).size !== classPriority.length ||
+           classPriority.some((name) => !classExists(name, request.tenantId)))) {
+        return response.status(422).json({ detail: "優先クラスは登録済みのクラスを重複なく指定してください。" });
+      }
       const name = typeof rawName === "string" ? rawName.trim() : rawName;
       const navigationUrl = typeof rawNavigationUrl === "string" ? rawNavigationUrl.trim() : rawNavigationUrl;
       if (rawName !== undefined && (typeof name !== "string" || !name || name.length > 40)) {
@@ -919,13 +1188,14 @@ function createApplication(options = {}) {
       if (name !== undefined) values.name = name;
       if (navigationUrl !== undefined) values.navigation_url = navigationUrl;
       if (markings !== undefined) values.markings = JSON.stringify(markings);
+      if (isActive !== undefined) values.is_active = isActive ? 1 : 0;
+      if (classPriority !== undefined) values.class_priority = JSON.stringify(classPriority);
       const assignments = Object.keys(values).map((key) => `${key} = ?`).join(", ");
       db.prepare(`UPDATE parking_lots SET ${assignments} WHERE id = ? AND tenant_id = ?`)
         .run(...Object.values(values), lotId, request.tenantId);
       realtime.notify(request.tenantId);
       response.json(parkingLotFromRow(db.prepare(
-        `SELECT id, name, display_order, area_height, area_width, navigation_url, markings
-         FROM parking_lots WHERE id = ? AND tenant_id = ?`,
+        `SELECT ${LOT_COLUMNS} FROM parking_lots WHERE id = ? AND tenant_id = ?`,
       ).get(lotId, request.tenantId)));
     } catch (error) {
       if (isUniqueConstraint(error)) {
@@ -1266,7 +1536,7 @@ function createApplication(options = {}) {
       const { plate, vehicle_type: vehicleType } = body;
       if (
         typeof plate !== "string" || !plate.trim() || plate.trim().length > 40 ||
-        !VEHICLE_TYPES.includes(vehicleType)
+        !classExists(vehicleType, request.tenantId)
       ) {
         return response.status(422).json({ detail: "Valid plate and vehicle type are required." });
       }
@@ -1412,7 +1682,7 @@ function createApplication(options = {}) {
       ) {
         return response.status(422).json({ detail: "Plate and vehicle type cannot be empty." });
       }
-      if (Object.hasOwn(data, "vehicle_type") && !VEHICLE_TYPES.includes(data.vehicle_type)) {
+      if (Object.hasOwn(data, "vehicle_type") && !classExists(data.vehicle_type, request.tenantId)) {
         return response.status(422).json({ detail: "Unknown vehicle type." });
       }
       if (Object.hasOwn(data, "notes")) {
@@ -1536,7 +1806,7 @@ function createApplication(options = {}) {
           !vehicle || typeof vehicle.external_id !== "string" || !vehicle.external_id.trim() ||
           vehicle.external_id.length > 120 || typeof vehicle.plate !== "string" ||
           !vehicle.plate.trim() || vehicle.plate.trim().length > 40 ||
-          !VEHICLE_TYPES.includes(vehicle.vehicle_type)
+          !classExists(vehicle.vehicle_type, headquartersId)
         ) return response.status(422).json({ detail: "Each vehicle requires external_id, plate, and vehicle_type." });
         if (vehicle.parking_lot_id != null &&
             (!Number.isInteger(vehicle.parking_lot_id) || !validateLot(vehicle.parking_lot_id, headquartersId))) {

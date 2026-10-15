@@ -15,9 +15,17 @@
   const statusError = document.querySelector("#status-error");
   const assessmentManagerDialog = document.querySelector("#assessment-manager-dialog");
   const assessmentManagerError = document.querySelector("#assessment-manager-error");
+  const classDialog = document.querySelector("#class-dialog");
+  const classError = document.querySelector("#class-error");
+  const logisticsDialog = document.querySelector("#logistics-dialog");
+  const logisticsError = document.querySelector("#logistics-error");
   let lots = [];
   let vehicles = [];
   let vehicleTypes = [];
+  let vehicleClasses = [];
+  let stores = [];
+  let lotDistances = [];
+  let storeLotDistances = [];
   let vehicleOptions = [];
   let statuses = [];
   let jobs = [];
@@ -119,6 +127,7 @@
     canManageFranchises = userCanManageFranchises;
     document.querySelector("#current-user").textContent = `${tenantName} · ${username}`;
     document.querySelector("#manage-locations-button").hidden = !canManage;
+    document.querySelector("#manage-logistics-button").hidden = !canManage;
     document.querySelector("#add-vehicle-button").hidden = !canManage;
     document.querySelector("#manage-franchises-button").hidden = !canManageFranchises;
     connectSocket();
@@ -147,6 +156,10 @@
     lots = data.parking_lots;
     vehicles = data.vehicles;
     vehicleTypes = data.vehicle_types;
+    vehicleClasses = data.vehicle_classes || [];
+    stores = data.stores || [];
+    lotDistances = data.lot_distances || [];
+    storeLotDistances = data.store_lot_distances || [];
     vehicleOptions = data.vehicle_options || [];
     statuses = data.statuses || [];
     jobs = data.jobs || [];
@@ -161,11 +174,19 @@
     populateVehicleTypeChoices();
     render();
     if (statusDialog.open) renderStatusManager();
+    if (classDialog.open) renderClassManager();
   }
 
-  function typeClass(type) {
-    const index = Math.max(0, vehicleTypes.indexOf(type));
-    return `type-color-${index}`;
+  function classColor(type) {
+    return vehicleClasses.find((item) => item.name === type)?.color || "#9aa5b1";
+  }
+
+  function typeClass() {
+    return "class-colored";
+  }
+
+  function colorizeByClass(element, type) {
+    element.style.setProperty("--class-color", classColor(type));
   }
 
   function render() {
@@ -235,7 +256,10 @@
     title.textContent = lot.name;
     const count = document.createElement("span");
     count.className = "lot-count";
-    count.textContent = `${inLot.length} 台`;
+    count.textContent = lot.capacity != null ? `${inLot.length}/${lot.capacity} 台` : `${inLot.length} 台`;
+    if (lot.capacity != null && inLot.length > lot.capacity) count.classList.add("over-capacity");
+    if (lot.is_active === false) card.classList.add("inactive-lot");
+    if (lot.class_priority?.length) card.title = `優先クラス: ${lot.class_priority.join(" > ")}`;
     headingTitle.append(title, count);
     if (lot.navigation_url) {
       const navigationIcon = document.createElement("span");
@@ -621,6 +645,7 @@
     const token = document.createElement("button");
     token.type = "button";
     token.className = `vehicle-token ${typeClass(vehicle.vehicle_type)}`;
+    colorizeByClass(token, vehicle.vehicle_type);
     token.dataset.id = vehicle.id;
     token.style.left = `${8 + vehicle.position_x * 84}%`;
     token.style.top = `${10 + vehicle.position_y * 80}%`;
@@ -787,6 +812,7 @@
       button.type = "button";
       button.className = `type-filter${value === "all" ? "" : ` ${typeClass(value)}`}${value === active ? " active" : ""}`;
       button.dataset.vehicleType = value;
+      if (value !== "all") colorizeByClass(button, value);
       button.textContent = label;
       button.addEventListener("click", () => {
         activeVehicleType = value;
@@ -1544,11 +1570,17 @@
       save.textContent = "保存";
       save.addEventListener("click", async () => {
         locationError.textContent = "";
-        if (!input.reportValidity() || !navigationInput.reportValidity()) return;
+        if (!input.reportValidity() || !navigationInput.reportValidity() || !capacityInput.reportValidity()) return;
         try {
           await api(`/api/parking-lots/${lot.id}`, {
             method: "PATCH",
-            body: JSON.stringify({ name: input.value, navigation_url: navigationInput.value }),
+            body: JSON.stringify({
+              name: input.value,
+              navigation_url: navigationInput.value,
+              capacity: capacityInput.value === "" ? null : Number(capacityInput.value),
+              is_active: activeInput.checked,
+              class_priority: priority,
+            }),
           });
           await loadBoard();
           renderLocationManager();
@@ -1573,8 +1605,82 @@
           locationError.textContent = error.message;
         }
       });
+      const extra = document.createElement("div");
+      extra.className = "location-extra";
+      const capacityLabel = document.createElement("label");
+      capacityLabel.textContent = "収容台数";
+      const capacityInput = document.createElement("input");
+      capacityInput.type = "number";
+      capacityInput.min = "0";
+      capacityInput.max = "1000";
+      capacityInput.step = "1";
+      capacityInput.placeholder = "無制限";
+      capacityInput.value = lot.capacity ?? "";
+      capacityLabel.append(capacityInput);
+      const activeLabel = document.createElement("label");
+      activeLabel.className = "location-active";
+      const activeInput = document.createElement("input");
+      activeInput.type = "checkbox";
+      activeInput.checked = lot.is_active !== false;
+      activeLabel.append(activeInput, document.createTextNode(" 使用中"));
+      let priority = [...(lot.class_priority || [])];
+      const priorityBox = document.createElement("div");
+      priorityBox.className = "priority-editor";
+      const renderPriority = () => {
+        priorityBox.replaceChildren();
+        const heading = document.createElement("span");
+        heading.className = "priority-title";
+        heading.textContent = "優先クラス（左ほど優先）";
+        priorityBox.append(heading);
+        priority.forEach((name, index) => {
+          const chip = document.createElement("span");
+          chip.className = "priority-chip class-colored";
+          colorizeByClass(chip, name);
+          const label = document.createElement("b");
+          label.textContent = `${index + 1}. ${name}`;
+          const actions = [
+            ["◀", "前へ", () => { if (index > 0) [priority[index - 1], priority[index]] = [priority[index], priority[index - 1]]; }],
+            ["▶", "後ろへ", () => { if (index < priority.length - 1) [priority[index + 1], priority[index]] = [priority[index], priority[index + 1]]; }],
+            ["×", "削除", () => { priority.splice(index, 1); }],
+          ].map(([text, title, action]) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = text;
+            button.title = title;
+            button.setAttribute("aria-label", `${name}を${title}`);
+            button.addEventListener("click", () => { action(); renderPriority(); });
+            return button;
+          });
+          chip.append(label, ...actions);
+          priorityBox.append(chip);
+        });
+        const available = vehicleTypes.filter((name) => !priority.includes(name));
+        if (available.length) {
+          const select = document.createElement("select");
+          select.setAttribute("aria-label", "優先クラスを追加");
+          const placeholder = document.createElement("option");
+          placeholder.value = "";
+          placeholder.textContent = "＋ クラスを追加";
+          select.append(placeholder, ...available.map((name) => {
+            const option = document.createElement("option");
+            option.value = name;
+            option.textContent = name;
+            return option;
+          }));
+          select.addEventListener("change", () => {
+            if (select.value) priority.push(select.value);
+            renderPriority();
+          });
+          priorityBox.append(select);
+        }
+      };
+      renderPriority();
+      extra.append(capacityLabel, activeLabel, priorityBox);
       row.append(input, navigationInput, save, remove);
-      list.append(row);
+      const item = document.createElement("div");
+      item.className = "location-item";
+      item.append(row, extra);
+      list.append(item);
     }
   }
 
@@ -1693,12 +1799,182 @@
     franchiseDialog.showModal();
   }
 
+  function renderClassManager() {
+    const list = document.querySelector("#class-manager-list");
+    list.replaceChildren();
+    for (const item of vehicleClasses) {
+      const row = document.createElement("div");
+      row.className = "status-manager-row class-manager-row";
+      const color = document.createElement("input");
+      color.type = "color";
+      color.value = item.color;
+      color.setAttribute("aria-label", `${item.name}の色`);
+      const name = document.createElement("input");
+      name.type = "text";
+      name.maxLength = 40;
+      name.value = item.name;
+      name.setAttribute("aria-label", `${item.name}のクラス名`);
+      const save = document.createElement("button");
+      save.type = "button";
+      save.className = "primary-button";
+      save.textContent = "保存";
+      save.addEventListener("click", async () => {
+        classError.textContent = "";
+        try {
+          await api(`/api/vehicle-classes/${item.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ name: name.value, color: color.value }),
+          });
+          await loadBoard();
+        } catch (error) {
+          classError.textContent = error.message;
+        }
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger-button";
+      remove.textContent = "削除";
+      remove.addEventListener("click", async () => {
+        classError.textContent = "";
+        if (!window.confirm(`クラス「${item.name}」を削除しますか？`)) return;
+        try {
+          await api(`/api/vehicle-classes/${item.id}`, { method: "DELETE" });
+          await loadBoard();
+        } catch (error) {
+          classError.textContent = error.message;
+        }
+      });
+      row.append(color, name, save, remove);
+      list.append(row);
+    }
+  }
+
+  function minutesInput(value, label) {
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "0";
+    input.max = "1440";
+    input.step = "1";
+    input.value = value ?? "";
+    input.setAttribute("aria-label", label);
+    return input;
+  }
+
+  function renderLogistics() {
+    const storeList = document.querySelector("#store-list");
+    storeList.replaceChildren();
+    for (const store of stores) {
+      const row = document.createElement("div");
+      row.className = "status-manager-row";
+      const name = document.createElement("span");
+      name.textContent = store.name;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger-button";
+      remove.textContent = "削除";
+      remove.addEventListener("click", async () => {
+        logisticsError.textContent = "";
+        if (!window.confirm(`店舗「${store.name}」を削除しますか？`)) return;
+        try {
+          await api(`/api/stores/${store.id}`, { method: "DELETE" });
+          await loadBoard();
+        } catch (error) {
+          logisticsError.textContent = error.message;
+        }
+      });
+      row.append(name, remove);
+      storeList.append(row);
+    }
+    const storeTable = document.querySelector("#store-distance-table");
+    storeTable.replaceChildren();
+    const storeGrid = document.createElement("table");
+    storeGrid.className = "distance-table";
+    const head = storeGrid.createTHead().insertRow();
+    head.append(document.createElement("th"));
+    for (const store of stores) {
+      const th = document.createElement("th");
+      th.textContent = store.name;
+      head.append(th);
+    }
+    const body = storeGrid.createTBody();
+    for (const lot of lots) {
+      const tr = body.insertRow();
+      const th = document.createElement("th");
+      th.scope = "row";
+      th.textContent = lot.name;
+      tr.append(th);
+      for (const store of stores) {
+        const entry = storeLotDistances.find((d) => d.store_id === store.id && d.lot_id === lot.id);
+        const input = minutesInput(entry?.minutes, `${store.name}から${lot.name}`);
+        input.dataset.storeId = store.id;
+        input.dataset.lotId = lot.id;
+        tr.insertCell().append(input);
+      }
+    }
+    storeTable.append(storeGrid);
+    const lotTable = document.querySelector("#lot-distance-table");
+    lotTable.replaceChildren();
+    const lotGrid = document.createElement("table");
+    lotGrid.className = "distance-table";
+    const lotHead = lotGrid.createTHead().insertRow();
+    lotHead.append(document.createElement("th"));
+    for (const lot of lots) {
+      const th = document.createElement("th");
+      th.textContent = lot.name;
+      lotHead.append(th);
+    }
+    const lotBody = lotGrid.createTBody();
+    lots.forEach((from, i) => {
+      const tr = lotBody.insertRow();
+      const th = document.createElement("th");
+      th.scope = "row";
+      th.textContent = from.name;
+      tr.append(th);
+      lots.forEach((to, j) => {
+        const cell = tr.insertCell();
+        if (j <= i) return;
+        const entry = lotDistances.find((d) =>
+          (d.from_lot_id === from.id && d.to_lot_id === to.id)
+          || (d.from_lot_id === to.id && d.to_lot_id === from.id));
+        const input = minutesInput(entry?.minutes, `${from.name}から${to.name}`);
+        input.dataset.fromLotId = from.id;
+        input.dataset.toLotId = to.id;
+        cell.append(input);
+      });
+    });
+    lotTable.append(lotGrid);
+  }
+
+  async function saveDistances(path, inputs, build) {
+    logisticsError.textContent = "";
+    try {
+      const entries = inputs.map((input) => build(input, input.value === "" ? null : Number(input.value)));
+      await api(path, { method: "PUT", body: JSON.stringify({ entries }) });
+      await loadBoard();
+    } catch (error) {
+      logisticsError.textContent = error.message;
+    }
+  }
+
+  function openLogisticsManager() {
+    logisticsError.textContent = "";
+    renderLogistics();
+    logisticsDialog.showModal();
+  }
+
+  function openClassManager() {
+    classError.textContent = "";
+    renderClassManager();
+    classDialog.showModal();
+  }
+
   function openVehicle(vehicle = null) {
     if (!vehicle && !canManage) return;
     vehicleForm.reset();
     formError.textContent = "";
     document.querySelector("#dialog-title").textContent = vehicle ? "車両情報を編集" : "車両を追加";
     document.querySelector("#manage-assessment-button").hidden = !canManage;
+    document.querySelector("#manage-classes-button").hidden = !canManage;
     document.querySelector("#manage-options-button").hidden = !canManage;
     document.querySelector("#manage-vehicle-statuses-button").hidden = !canManage;
     document.querySelector("#delete-vehicle").hidden = !vehicle || !canManage;
@@ -1789,6 +2065,43 @@
   });
   document.querySelector("#add-vehicle-button").addEventListener("click", () => openVehicle());
   document.querySelector("#manage-locations-button").addEventListener("click", openLocationManager);
+  document.querySelector("#manage-logistics-button").addEventListener("click", openLogisticsManager);
+  document.querySelector("#manage-classes-button").addEventListener("click", openClassManager);
+  document.querySelector("#close-class-dialog").addEventListener("click", () => classDialog.close());
+  document.querySelector("#close-logistics-dialog").addEventListener("click", () => logisticsDialog.close());
+  document.querySelector("#add-class-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    classError.textContent = "";
+    const form = event.currentTarget;
+    try {
+      await api("/api/vehicle-classes", {
+        method: "POST",
+        body: JSON.stringify({ name: form.elements.name.value, color: form.elements.color.value }),
+      });
+      form.elements.name.value = "";
+      await loadBoard();
+    } catch (error) {
+      classError.textContent = error.message;
+    }
+  });
+  document.querySelector("#add-store-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    logisticsError.textContent = "";
+    const form = event.currentTarget;
+    try {
+      await api("/api/stores", { method: "POST", body: JSON.stringify({ name: form.elements.name.value }) });
+      form.elements.name.value = "";
+      await loadBoard();
+    } catch (error) {
+      logisticsError.textContent = error.message;
+    }
+  });
+  document.querySelector("#save-store-distances").addEventListener("click", () =>
+    saveDistances("/api/store-distances", [...document.querySelectorAll("#store-distance-table input")],
+      (input, minutes) => ({ store_id: Number(input.dataset.storeId), lot_id: Number(input.dataset.lotId), minutes })));
+  document.querySelector("#save-lot-distances").addEventListener("click", () =>
+    saveDistances("/api/lot-distances", [...document.querySelectorAll("#lot-distance-table input")],
+      (input, minutes) => ({ from_lot_id: Number(input.dataset.fromLotId), to_lot_id: Number(input.dataset.toLotId), minutes })));
   document.querySelector("#manage-franchises-button").addEventListener("click", openFranchiseManager);
   document.querySelector("#manage-vehicle-statuses-button").addEventListener("click", openStatusManager);
   document.querySelector("#manage-options-button").addEventListener("click", () => {

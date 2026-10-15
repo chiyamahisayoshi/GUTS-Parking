@@ -10,6 +10,11 @@ const LOT_NAMES = [
   "立駐",
 ];
 const VEHICLE_TYPES = ["A-1", "A-2", "A-2P", "B", "B軽トラ", "C-1", "C-2", "D", "H-1", "H-2", "その他"];
+const DEFAULT_CLASS_COLORS = [
+  "#4f86f7", "#9b6ad8", "#f0a043", "#38a9d0", "#e56b7a",
+  "#c7b23c", "#6f8794", "#7fb24f", "#d98a57", "#6d78c8", "#9aa5b1",
+];
+const DEFAULT_STORES = ["本店", "駅前店"];
 const DEFAULT_VEHICLE_OPTIONS = ["ETC", "車載器", "禁煙", "喫煙", "ナビ", "スタッドレス"];
 const DEFAULT_STATUSES = [
   { key: "unwashed", name: "洗車待ち", icon: "🫧" },
@@ -44,6 +49,22 @@ function seedTenantStatuses(db, tenantId) {
   for (const status of DEFAULT_STATUSES) {
     addStatus.run(tenantId, status.key, status.name, status.icon);
   }
+}
+
+function seedTenantVehicleClasses(db, tenantId) {
+  const addClass = db.prepare(`
+    INSERT OR IGNORE INTO vehicle_classes (tenant_id, name, color, display_order)
+    VALUES (?, ?, ?, ?)
+  `);
+  VEHICLE_TYPES.forEach((name, index) => {
+    addClass.run(tenantId, name, DEFAULT_CLASS_COLORS[index % DEFAULT_CLASS_COLORS.length], index);
+  });
+  const extra = db.prepare(`
+    SELECT DISTINCT vehicle_type AS name FROM vehicles WHERE tenant_id = ?
+    AND vehicle_type NOT IN (SELECT name FROM vehicle_classes WHERE tenant_id = ?)
+  `).all(tenantId, tenantId);
+  let order = VEHICLE_TYPES.length;
+  for (const { name } of extra) addClass.run(tenantId, name, "#9aa5b1", order++);
 }
 
 function seedTenantAssessment(db, tenantId) {
@@ -454,6 +475,63 @@ function openDatabase(databasePath) {
       throw error;
     }
   }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vehicle_classes (
+      id INTEGER PRIMARY KEY,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      color TEXT NOT NULL DEFAULT '#9aa5b1',
+      display_order INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (tenant_id, name COLLATE NOCASE)
+    );
+    CREATE TABLE IF NOT EXISTS stores (
+      id INTEGER PRIMARY KEY,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      UNIQUE (tenant_id, name COLLATE NOCASE)
+    );
+    CREATE TABLE IF NOT EXISTS lot_distances (
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      from_lot_id INTEGER NOT NULL REFERENCES parking_lots(id) ON DELETE CASCADE,
+      to_lot_id INTEGER NOT NULL REFERENCES parking_lots(id) ON DELETE CASCADE,
+      minutes REAL NOT NULL CHECK(minutes >= 0),
+      km REAL CHECK(km IS NULL OR km >= 0),
+      PRIMARY KEY (from_lot_id, to_lot_id)
+    );
+    CREATE TABLE IF NOT EXISTS store_lot_distances (
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      lot_id INTEGER NOT NULL REFERENCES parking_lots(id) ON DELETE CASCADE,
+      minutes REAL NOT NULL CHECK(minutes >= 0),
+      km REAL CHECK(km IS NULL OR km >= 0),
+      PRIMARY KEY (store_id, lot_id)
+    );
+  `);
+  const currentLotColumns = new Set(db.prepare("PRAGMA table_info(parking_lots)").all().map((column) => column.name));
+  if (!currentLotColumns.has("capacity")) db.exec("ALTER TABLE parking_lots ADD COLUMN capacity INTEGER");
+  if (!currentLotColumns.has("is_active")) db.exec("ALTER TABLE parking_lots ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1");
+  if (!currentLotColumns.has("class_priority")) db.exec("ALTER TABLE parking_lots ADD COLUMN class_priority TEXT NOT NULL DEFAULT '[]'");
+  const logisticsMigration = "vehicle-classes-and-logistics-v1";
+  if (!db.prepare("SELECT 1 FROM schema_migrations WHERE name = ?").get(logisticsMigration)) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const tenant of db.prepare("SELECT id FROM tenants").all()) {
+        seedTenantVehicleClasses(db, tenant.id);
+      }
+      const headquarters = db.prepare("SELECT id FROM tenants WHERE is_headquarters = 1 ORDER BY id").get();
+      if (headquarters) {
+        for (const name of DEFAULT_STORES) {
+          db.prepare("INSERT OR IGNORE INTO stores (tenant_id, name) VALUES (?, ?)").run(headquarters.id, name);
+        }
+      }
+      db.prepare("INSERT INTO schema_migrations (name) VALUES (?)").run(logisticsMigration);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      db.close();
+      throw error;
+    }
+  }
   const assessmentMigration = "vehicle-assessment-sheet-v1";
   if (!db.prepare("SELECT 1 FROM schema_migrations WHERE name = ?").get(assessmentMigration)) {
     db.exec("BEGIN IMMEDIATE");
@@ -480,5 +558,6 @@ module.exports = {
   openDatabase,
   seedTenantAssessment,
   seedTenantStatuses,
+  seedTenantVehicleClasses,
   seedTenantVehicleOptions,
 };

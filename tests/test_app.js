@@ -1,4 +1,4 @@
-﻿const assert = require("node:assert/strict");
+const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const { once } = require("node:events");
 const os = require("node:os");
@@ -1299,4 +1299,42 @@ test("manages dispatch jobs: ordering, completion, isolation, validation and mid
 
   assert.equal((await agent.delete(`/api/jobs/${late.body.id}`)).status, 204);
   assert.equal((await agent.delete(`/api/jobs/${late.body.id}`)).status, 404);
+});
+
+test("manages class colours, lot priority, stores and distances", async () => {
+  const boot = (await agent.get("/api/bootstrap")).body;
+  assert.equal(boot.vehicle_classes.length, boot.vehicle_types.length);
+  assert.match(boot.vehicle_classes[0].color, /^#[0-9a-f]{6}$/i);
+  assert.equal((await agent.post("/api/vehicle-classes").send({ name: "Z-1", color: "red" })).status, 422);
+  const created = await agent.post("/api/vehicle-classes").send({ name: "Z-1", color: "#112233" });
+  assert.equal(created.status, 201);
+  assert.equal((await agent.post("/api/vehicle-classes").send({ name: "z-1", color: "#112233" })).status, 409);
+  const recolored = await agent.patch(`/api/vehicle-classes/${created.body.id}`).send({ color: "#445566", name: "Z-2" });
+  assert.equal(recolored.status, 200);
+  const lot = boot.parking_lots[0];
+  const patched = await agent.patch(`/api/parking-lots/${lot.id}`).send({
+    capacity: 5, is_active: false, class_priority: ["Z-2", "A-1"],
+  });
+  assert.equal(patched.status, 200);
+  assert.deepEqual(patched.body.class_priority, ["Z-2", "A-1"]);
+  assert.equal(patched.body.capacity, 5);
+  assert.equal(patched.body.is_active, false);
+  assert.equal((await agent.patch(`/api/parking-lots/${lot.id}`).send({ class_priority: ["nope"] })).status, 422);
+  assert.equal((await agent.patch(`/api/parking-lots/${lot.id}`).send({ capacity: -1 })).status, 422);
+  assert.equal((await agent.patch(`/api/parking-lots/${lot.id}`).send({ capacity: null, is_active: true })).status, 200);
+  const vehicle = await agent.post("/api/vehicles").send({ plate: "品川 300 ち 77-77", vehicle_type: "Z-2" });
+  assert.equal(vehicle.status, 201);
+  assert.equal((await agent.delete(`/api/vehicle-classes/${created.body.id}`)).status, 409);
+  await agent.delete(`/api/vehicles/${vehicle.body.id}`);
+  assert.equal((await agent.delete(`/api/vehicle-classes/${created.body.id}`)).status, 204);
+  const store = (await agent.post("/api/stores").send({ name: "テスト店" })).body;
+  const [a, b] = boot.parking_lots;
+  assert.equal((await agent.put("/api/store-distances").send({ entries: [{ store_id: store.id, lot_id: a.id, minutes: 7 }] })).status, 200);
+  assert.equal((await agent.put("/api/lot-distances").send({ entries: [{ from_lot_id: a.id, to_lot_id: b.id, minutes: 12 }] })).status, 200);
+  const after = (await agent.get("/api/bootstrap")).body;
+  assert.ok(after.store_lot_distances.some((d) => d.store_id === store.id && d.minutes === 7));
+  assert.ok(after.lot_distances.some((d) => d.minutes === 12));
+  await agent.put("/api/lot-distances").send({ entries: [{ from_lot_id: a.id, to_lot_id: b.id, minutes: null }] });
+  assert.equal((await agent.get("/api/bootstrap")).body.lot_distances.length, 0);
+  assert.equal((await agent.delete(`/api/stores/${store.id}`)).status, 204);
 });
